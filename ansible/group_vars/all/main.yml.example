@@ -1,0 +1,7 @@
+---
+satellite_version: "6.18"
+satellite_fqdn: "satellite-poc.example.com"
+remove_rhui_client: false
+
+# Retrieved from `terraform -chdir=terraform output -raw pulp_volume_id` by the runner.
+pulp_volume_id: "vol-0123456789abcdef0"

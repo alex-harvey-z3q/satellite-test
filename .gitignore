@@ -1,0 +1,8 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform/terraform.tfvars.example
+ansible/inventory.ini
+ansible/.ansible/
+ansible/collections/

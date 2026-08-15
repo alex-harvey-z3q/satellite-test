@@ -1,0 +1,126 @@
+---
+- name: Install Red Hat Satellite on the EC2 host
+  hosts: satellite
+  become: true
+  gather_facts: true
+  vars:
+    satellite_log: /var/log/satellite-installer-poc.log
+
+  pre_tasks:
+    - name: Verify a supported RHEL 9 x86_64 host
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'RedHat'
+          - ansible_distribution_major_version == '9'
+          - ansible_architecture == 'x86_64'
+        fail_msg: Satellite {{ satellite_version }} requires a fresh RHEL 9 x86_64 host.
+
+    - name: Verify the Satellite FQDN resolves locally
+      ansible.builtin.command: getent hosts {{ satellite_fqdn }}
+      changed_when: false
+
+    - name: Optionally remove the RHUI client from a Cloud Access Gold Image
+      ansible.builtin.dnf:
+        name: rh-amazon-rhui-client*
+        state: absent
+      when: remove_rhui_client | bool
+
+    - name: Enable product-id plugin for a Cloud Access Gold Image
+      ansible.builtin.copy:
+        dest: /etc/yum/pluginconf.d/product-id.conf
+        content: "[main]\\nenabled=1\\n"
+        mode: '0644'
+      when: remove_rhui_client | bool
+
+    - name: Verify Red Hat credentials were supplied by the runner environment
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', 'RHSM_USERNAME') | length > 0
+          - lookup('ansible.builtin.env', 'RHSM_PASSWORD') | length > 0
+        fail_msg: Set RHSM_USERNAME and RHSM_PASSWORD before running scripts/install.sh.
+
+    - name: Register with Red Hat Subscription Management
+      ansible.builtin.shell: >-
+        subscription-manager register --force
+        --username "$RHSM_USERNAME" --password "$RHSM_PASSWORD"
+      args:
+        executable: /bin/bash
+      environment:
+        RHSM_USERNAME: "{{ lookup('ansible.builtin.env', 'RHSM_USERNAME') }}"
+        RHSM_PASSWORD: "{{ lookup('ansible.builtin.env', 'RHSM_PASSWORD') }}"
+      no_log: true
+      changed_when: true
+
+    - name: Disable all repositories before enabling Satellite repositories
+      ansible.builtin.command: subscription-manager repos --disable=*
+      changed_when: true
+
+    - name: Enable required RHEL and Satellite repositories
+      ansible.builtin.command:
+        argv:
+          - subscription-manager
+          - repos
+          - --enable=rhel-9-for-x86_64-baseos-rpms
+          - --enable=rhel-9-for-x86_64-appstream-rpms
+          - --enable=satellite-{{ satellite_version }}-for-rhel-9-x86_64-rpms
+          - --enable=satellite-maintenance-{{ satellite_version }}-for-rhel-9-x86_64-rpms
+      changed_when: true
+
+    - name: Locate the Pulp EBS device by its AWS volume serial
+      ansible.builtin.shell: |
+        set -o pipefail
+        lsblk -dn -o NAME,SERIAL | awk '$2 == "{{ pulp_volume_id | regex_replace("-", "") }}" { print "/dev/" $1; exit }'
+      args:
+        executable: /bin/bash
+      register: pulp_device_lookup
+      changed_when: false
+
+    - name: Verify the Pulp EBS device is attached
+      ansible.builtin.assert:
+        that: pulp_device_lookup.stdout | length > 0
+        fail_msg: "The EBS volume {{ pulp_volume_id }} is not visible yet. Wait for attachment and re-run."
+
+    - name: Inspect Pulp EBS filesystem
+      ansible.builtin.command: lsblk -dn -o FSTYPE {{ pulp_device_lookup.stdout }}
+      register: pulp_filesystem
+      changed_when: false
+
+    - name: Create the XFS filesystem for Pulp content
+      ansible.builtin.command: mkfs.xfs -f {{ pulp_device_lookup.stdout }}
+      when: pulp_filesystem.stdout | trim == ''
+      changed_when: true
+
+    - name: Get Pulp EBS UUID
+      ansible.builtin.command: blkid -s UUID -o value {{ pulp_device_lookup.stdout }}
+      register: pulp_uuid
+      changed_when: false
+
+    - name: Create the Pulp mount point
+      ansible.builtin.file:
+        path: /var/lib/pulp
+        state: directory
+        mode: '0755'
+
+    - name: Persist and mount the Pulp volume
+      ansible.posix.mount:
+        path: /var/lib/pulp
+        src: UUID={{ pulp_uuid.stdout }}
+        fstype: xfs
+        opts: defaults,nofail
+        state: mounted
+
+  tasks:
+    - name: Install the Satellite installer package
+      ansible.builtin.dnf:
+        name: satellite
+        state: present
+
+    - name: Run the Satellite installer once
+      ansible.builtin.shell: >-
+        satellite-installer --scenario satellite
+        --foreman-initial-organization "{{ satellite_initial_organization | default('Default Organization') }}"
+        --foreman-initial-location "{{ satellite_initial_location | default('Default Location') }}"
+        |& tee {{ satellite_log }}
+      args:
+        executable: /bin/bash
+        creates: /etc/foreman/settings.yaml
