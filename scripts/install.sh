@@ -25,15 +25,22 @@ if [[ ! -f "$ansible_dir/group_vars/all/main.yml" ]]; then
 fi
 
 mkdir -p "$ansible_dir/.ansible" "$ansible_dir/collections"
+known_hosts_file="$ansible_dir/.ansible/known_hosts"
+inventory_file="$ansible_dir/.ansible/inventory.ini"
 
-ANSIBLE_LOCAL_TEMP="$ansible_dir/.ansible" \
-ansible-galaxy collection install -p "$ansible_dir/collections" -r "$ansible_dir/requirements.yml"
+printf '[satellite]\n%s\n' "$host" > "$inventory_file"
 
 ANSIBLE_CONFIG="$ansible_dir/ansible.cfg" \
 ANSIBLE_COLLECTIONS_PATH="$ansible_dir/collections" \
 ANSIBLE_LOCAL_TEMP="$ansible_dir/.ansible" \
-ansible-playbook -i "$host," "$ansible_dir/site.yml" \
+ansible-galaxy collection install --force -p "$ansible_dir/collections" -r "$ansible_dir/requirements.yml"
+
+ANSIBLE_CONFIG="$ansible_dir/ansible.cfg" \
+ANSIBLE_COLLECTIONS_PATH="$ansible_dir/collections" \
+ANSIBLE_LOCAL_TEMP="$ansible_dir/.ansible" \
+ansible-playbook -i "$inventory_file" "$ansible_dir/site.yml" \
   --user ec2-user \
   --private-key "$SSH_PRIVATE_KEY_FILE" \
+  --ssh-common-args="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$known_hosts_file" \
   -e "satellite_fqdn=$fqdn" \
   -e "pulp_volume_id=$pulp_volume_id"

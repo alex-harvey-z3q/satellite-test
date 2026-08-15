@@ -1,59 +1,94 @@
 # Red Hat Satellite on EC2 — proof of concept
 
-This proof of concept creates a RHEL 9 EC2 instance and a dedicated encrypted EBS volume for Satellite content, then installs Red Hat Satellite with Ansible.
+This proof of concept uses Terraform to create a RHEL 9 EC2 instance and an encrypted EBS volume for Satellite content, then uses Ansible to install Red Hat Satellite. Run the workflow through the included Makefile only.
 
-It uses an existing VPC and subnet, and does not create a public network, a NAT gateway, or a Route 53 hosted zone. The selected subnet must have egress to Red Hat CDN and AWS Systems Manager. The instance role is included for Systems Manager access; the supplied runner uses SSH.
+## What this creates
 
-## Prerequisites
+- An `r6i.2xlarge` RHEL 9 EC2 instance (8 vCPU, 64 GiB memory).
+- A 100 GiB encrypted gp3 root disk and a separate encrypted 500 GiB gp3 disk mounted at `/var/lib/pulp`.
+- A security group restricted to the CIDRs in `terraform/terraform.tfvars`.
+- An IAM role for AWS Systems Manager and the instance profile that uses it.
 
-- Terraform >= 1.6, AWS CLI credentials for the target account, and Ansible Core >= 2.15.
-- An existing x86_64 RHEL 9 AMI which your account is entitled to use (for example, through Red Hat Cloud Access), an existing VPC/subnet, and an EC2 key pair with its matching private key. The supplied Ansible runner connects over SSH.
-- A Red Hat Satellite subscription and an activation key that entitles this host to the Satellite and RHEL repositories.
+Red Hat documents RHEL 9 x86_64, at least 4 CPU cores, 20 GiB RAM, 4 GiB swap, a fresh FQDN host, and separate Pulp storage as Satellite prerequisites. See the [Satellite installation planning guide](https://docs.redhat.com/en/documentation/red_hat_satellite/6.18/html/installing_satellite_server_in_a_connected_network_environment/planning-satellite-server-installation_satellite).
 
-Red Hat currently documents RHEL 9 x86_64, 4 CPU cores, 20 GiB RAM, 4 GiB swap, a fresh host with a FQDN, and a separately mounted `/var/lib/pulp` volume. The default instance (`r6i.2xlarge`) and 500 GiB gp3 content volume deliberately exceed the minimum for a small POC. See Red Hat's [installation planning guide](https://docs.redhat.com/en/documentation/red_hat_satellite/6.18/html/installing_satellite_server_in_a_connected_network_environment/planning-satellite-server-installation_satellite).
+## Before you start
 
-## Deploy
+You need Terraform >= 1.6, Ansible Core >= 2.15, the AWS CLI, a Red Hat subscription or active RHEL trial that includes Satellite access, and the private key for the EC2 key pair named in `terraform/terraform.tfvars`.
 
-1. Configure AWS credentials and copy the input example:
+`terraform/terraform.tfvars` is a local, Git-ignored infrastructure input file. Review it before applying: it selects the AWS account region, VPC/subnet, RHEL AMI, EC2 key pair, and the CIDR allowed to connect on SSH and HTTPS. It must never contain credentials or passwords.
+
+Authenticate the AWS CLI in the shell that will run `make`. In this environment, run `select_site` and choose `personal` first. Confirm the selected account with:
+
+```sh
+aws sts get-caller-identity
+```
+
+## Complete workflow
+
+1. Check the local toolchain and Terraform configuration:
 
    ```sh
-   cp terraform/terraform.tfvars.example terraform/terraform.tfvars
-   # edit terraform/terraform.tfvars; do not commit it
-   terraform -chdir=terraform init
-   terraform -chdir=terraform plan
-   terraform -chdir=terraform apply
+   make preflight
    ```
 
-2. Copy and edit the non-secret Ansible variables:
+2. Review the exact AWS resources that would be created. This does not create anything:
 
    ```sh
-   cp ansible/group_vars/all/main.yml.example ansible/group_vars/all/main.yml
+   make plan
    ```
 
-3. Run the installer. The EC2 key must match `key_name` in Terraform. Supply the Red Hat credentials only through environment variables; do not put them in a shell history, Terraform file, or Ansible variable file.
+3. Create the EC2 host and EBS volume. Terraform will show the final plan and ask for confirmation:
+
+   ```sh
+   make apply
+   ```
+
+4. Supply the two Red Hat credentials only in the current shell. `read -s` prevents the password from being echoed; do not put either value in `terraform.tfvars`, `main.yml`, a command line, or Git.
 
    ```sh
    read -r "RHSM_USERNAME?Red Hat login: "
    read -rs "RHSM_PASSWORD?Red Hat password: "
    export RHSM_USERNAME RHSM_PASSWORD
-   SSH_PRIVATE_KEY_FILE=/absolute/path/to/key.pem ./scripts/install.sh
-   unset RHSM_PASSWORD
    ```
 
-The play writes an installation log to `/var/log/satellite-installer-poc.log`. A successful run prints the initial admin password; retrieve it from that file on the host. Re-running is safe after the initial installation: it skips `satellite-installer` when `/etc/foreman/settings.yaml` exists.
+5. Install Satellite. `SSH_PRIVATE_KEY_FILE` must be the absolute path of the private key matching the `key_name` configured in `terraform/terraform.tfvars`. The `install` target creates the non-secret Ansible settings file when needed, installs its required collection, registers the host with Red Hat Subscription Management, mounts the Pulp disk, and runs `satellite-installer`.
+
+   ```sh
+   make install SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+   ```
+
+   The install can take tens of minutes. It writes `/var/log/satellite-installer-poc.log` on the EC2 host. `satellite-installer` is safe to run again to reconcile its configuration.
+
+6. Immediately clear the Red Hat secrets from the current shell:
+
+   ```sh
+   unset RHSM_USERNAME RHSM_PASSWORD
+   ```
+
+7. Show the instance address, Satellite FQDN, and other outputs:
+
+   ```sh
+   make output
+   ```
+
+   To connect over SSH for troubleshooting:
+
+   ```sh
+   make ssh SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+   ```
+
+8. Destroy the POC when finished. Terraform asks for confirmation. This terminates the EC2 instance and deletes its Pulp EBS volume:
+
+   ```sh
+   make destroy
+   ```
 
 ## Network and DNS
 
-The security group allows HTTPS from `admin_cidrs` and optional SSH from `ssh_cidrs`. Add the required inbound ports before adding Capsules, managed clients, DHCP/DNS/TFTP, or remote-execution features. Red Hat's complete port matrix is authoritative.
+The configured security group opens SSH and Satellite HTTPS only to `ssh_cidrs` and `admin_cidrs` in `terraform/terraform.tfvars`. Before using Capsules, managed clients, provisioning, DHCP/DNS/TFTP, or remote execution, add the relevant ports from Red Hat’s port matrix.
 
-When `satellite_fqdn` and `hosted_zone_id` are set, Terraform creates a forward DNS record. Otherwise, the short-lived POC uses the EC2 internal FQDN. It does not attempt to fabricate reverse DNS, custom certificates, content manifests, Capsules, or client provisioning.
+For a short-lived POC, omitting `satellite_fqdn` and `hosted_zone_id` uses the EC2 internal FQDN. For a durable deployment, set both values to create a Route 53 forward record and arrange matching reverse DNS externally. Satellite requires forward and reverse DNS resolution.
 
-## Teardown
+## Cost and cleanup
 
-Destroying the stack terminates the instance and deletes the data volume because it is a POC:
-
-```sh
-terraform -chdir=terraform destroy
-```
-
-Take a backup or snapshot before destroying anything you want to retain.
+The current Sydney defaults are approximately US$0.84/hour while running, excluding data transfer, snapshots, and tax. Stopping the instance does not stop EBS charges; use `make destroy` when the POC is no longer needed. Do not create snapshots unless you intend to retain and pay for them.

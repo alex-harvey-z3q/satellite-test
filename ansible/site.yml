@@ -10,9 +10,9 @@
     - name: Verify a supported RHEL 9 x86_64 host
       ansible.builtin.assert:
         that:
-          - ansible_distribution == 'RedHat'
-          - ansible_distribution_major_version == '9'
-          - ansible_architecture == 'x86_64'
+          - ansible_facts['distribution'] == 'RedHat'
+          - ansible_facts['distribution_major_version'] == '9'
+          - ansible_facts['architecture'] == 'x86_64'
         fail_msg: Satellite {{ satellite_version }} requires a fresh RHEL 9 x86_64 host.
 
     - name: Verify the Satellite FQDN resolves locally
@@ -50,6 +50,26 @@
         RHSM_PASSWORD: "{{ lookup('ansible.builtin.env', 'RHSM_PASSWORD') }}"
       no_log: true
       changed_when: true
+
+    - name: Allow Subscription Manager to manage Red Hat repositories
+      ansible.builtin.command:
+        argv:
+          - subscription-manager
+          - config
+          - --rhsm.manage_repos=1
+      changed_when: true
+
+    - name: Attach the eligible Red Hat trial subscription
+      ansible.builtin.command:
+        argv:
+          - subscription-manager
+          - attach
+          - --auto
+      register: subscription_attach
+      changed_when: "'Successfully attached' in subscription_attach.stdout"
+      failed_when: >-
+        subscription_attach.rc != 0 and
+        'already attached' not in subscription_attach.stdout | lower
 
     - name: Disable all repositories before enabling Satellite repositories
       ansible.builtin.command: subscription-manager repos --disable=*
@@ -123,4 +143,3 @@
         |& tee {{ satellite_log }}
       args:
         executable: /bin/bash
-        creates: /etc/foreman/settings.yaml

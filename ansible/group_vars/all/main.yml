@@ -1,0 +1,5 @@
+---
+# This EC2 image is the AWS hourly RHEL image, not a Cloud Access Gold Image.
+# Keep its RHUI client installed; RHSM credentials are supplied at runtime.
+satellite_version: "6.18"
+remove_rhui_client: false
