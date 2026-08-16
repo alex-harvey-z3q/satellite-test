@@ -1,0 +1,19 @@
+{
+  "name": "__TEST_HOSTNAME__",
+  "organization_id": "REPLACE_WITH_ORGANIZATION_ID",
+  "location_id": "REPLACE_WITH_LOCATION_ID",
+  "hostgroup_id": "REPLACE_WITH_HOSTGROUP_ID",
+  "build": false,
+  "managed": true,
+  "interfaces_attributes": [
+    {
+      "type": "interface",
+      "name": "eth0",
+      "mac": "__TEST_MAC__",
+      "managed": true,
+      "primary": true,
+      "provision": true,
+      "subnet_id": "REPLACE_WITH_SUBNET_ID"
+    }
+  ]
+}

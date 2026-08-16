@@ -1,0 +1,355 @@
+---
+- name: Create minimal Foreman objects for Proxmox answer-file acceptance tests
+  hosts: satellite
+  become: true
+  gather_facts: false
+  vars:
+    proxmox_prerequisites_apply: false
+    proxmox_test_organization: "Default Organization"
+    proxmox_test_location: "Default Location"
+    proxmox_test_subnet_name: "proxmox-acceptance-test"
+    proxmox_test_subnet_network: "192.0.2.0"
+    proxmox_test_subnet_mask: "255.255.255.0"
+    proxmox_test_subnet_gateway: "192.0.2.1"
+    proxmox_test_subnet_dns: "192.0.2.53"
+    proxmox_test_os_name: "Proxmox VE"
+    proxmox_test_os_major: "9"
+    proxmox_test_os_title: "Proxmox VE 9"
+    proxmox_test_hostgroup_name: "Proxmox Acceptance Test"
+    proxmox_answer_template_name: "Proxmox Autoinstall Answer File"
+    proxmox_ipxe_template_name: "Proxmox VE PXEiPXE"
+    proxmox_acceptance_fixture: "{{ playbook_dir }}/../spec/fixtures/foreman-acceptance-host.json"
+    proxmox_acceptance_fixture_example: "{{ playbook_dir }}/../spec/fixtures/foreman-acceptance-host.json.example"
+
+  pre_tasks:
+    - name: Require explicit approval for test-object creation
+      ansible.builtin.assert:
+        that:
+          - proxmox_prerequisites_apply | bool
+          - proxmox_test_subnet_network == '192.0.2.0'
+        fail_msg: >-
+          This playbook creates Foreman records. Run it only through
+          `make proxmox-prerequisites`; the default TEST-NET subnet is intentional.
+
+    - name: Verify Hammer is available with local Satellite credentials
+      ansible.builtin.command: hammer --output json organization list
+      changed_when: false
+
+  tasks:
+    - name: Query existing Foreman organizations
+      ansible.builtin.command:
+        argv: [hammer, --output, json, organization, list, --per-page, all]
+      register: proxmox_organizations
+      changed_when: false
+
+    - name: Select the test organization
+      ansible.builtin.set_fact:
+        proxmox_organization_matches: >-
+          {{ (proxmox_organizations.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_test_organization) | list }}
+
+    - name: Verify the test organization is unique
+      ansible.builtin.assert:
+        that: proxmox_organization_matches | length == 1
+        fail_msg: "Expected exactly one organization named {{ proxmox_test_organization }}."
+
+    - name: Query existing Foreman locations
+      ansible.builtin.command:
+        argv: [hammer, --output, json, location, list, --per-page, all]
+      register: proxmox_locations
+      changed_when: false
+
+    - name: Select the test location
+      ansible.builtin.set_fact:
+        proxmox_location_matches: >-
+          {{ (proxmox_locations.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_test_location) | list }}
+
+    - name: Verify the test location is unique
+      ansible.builtin.assert:
+        that: proxmox_location_matches | length == 1
+        fail_msg: "Expected exactly one location named {{ proxmox_test_location }}."
+
+    - name: Query the x86_64 architecture
+      ansible.builtin.command:
+        argv: [hammer, --output, json, architecture, list, --per-page, all]
+      register: proxmox_architectures
+      changed_when: false
+
+    - name: Verify x86_64 is available
+      ansible.builtin.assert:
+        that: >-
+          ((proxmox_architectures.stdout | from_json)
+          | selectattr('Name', 'equalto', 'x86_64') | list | length) == 1
+        fail_msg: Satellite must provide the x86_64 architecture.
+
+    - name: Query existing Proxmox test subnet
+      ansible.builtin.command:
+        argv: [hammer, --output, json, subnet, list, --per-page, all]
+      register: proxmox_subnets
+      changed_when: false
+
+    - name: Select the Proxmox test subnet
+      ansible.builtin.set_fact:
+        proxmox_subnet_matches: >-
+          {{ (proxmox_subnets.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_test_subnet_name) | list }}
+
+    - name: Verify the Proxmox test subnet is absent or unique
+      ansible.builtin.assert:
+        that: proxmox_subnet_matches | length <= 1
+        fail_msg: "More than one subnet is named {{ proxmox_test_subnet_name }}."
+
+    - name: Create the non-routable Proxmox test subnet
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - subnet
+          - create
+          - --name
+          - "{{ proxmox_test_subnet_name }}"
+          - --network
+          - "{{ proxmox_test_subnet_network }}"
+          - --mask
+          - "{{ proxmox_test_subnet_mask }}"
+          - --gateway
+          - "{{ proxmox_test_subnet_gateway }}"
+          - --dns-primary
+          - "{{ proxmox_test_subnet_dns }}"
+          - --ipam
+          - None
+          - --boot-mode
+          - Static
+          - --organization
+          - "{{ proxmox_test_organization }}"
+          - --location
+          - "{{ proxmox_test_location }}"
+      when: proxmox_subnet_matches | length == 0
+      changed_when: true
+
+    - name: Refresh the Proxmox test subnet
+      ansible.builtin.command:
+        argv: [hammer, --output, json, subnet, list, --per-page, all]
+      register: proxmox_subnets
+      changed_when: false
+
+    - name: Record the Proxmox test subnet ID
+      ansible.builtin.set_fact:
+        proxmox_test_subnet_id: >-
+          {{ ((proxmox_subnets.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_test_subnet_name) | list | first).Id }}
+
+    - name: Query existing provisioning templates
+      ansible.builtin.command:
+        argv: [hammer, --output, json, template, list, --per-page, all]
+      register: proxmox_templates
+      changed_when: false
+
+    - name: Select the Proxmox provision template
+      ansible.builtin.set_fact:
+        proxmox_answer_template_matches: >-
+          {{ (proxmox_templates.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_answer_template_name) | list }}
+
+    - name: Select the Proxmox iPXE template
+      ansible.builtin.set_fact:
+        proxmox_ipxe_template_matches: >-
+          {{ (proxmox_templates.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_ipxe_template_name) | list }}
+
+    - name: Refuse conflicting template names
+      ansible.builtin.assert:
+        that:
+          - proxmox_answer_template_matches | length <= 1
+          - proxmox_ipxe_template_matches | length <= 1
+        fail_msg: >-
+          A Proxmox template name is ambiguous. Resolve it before running the test setup,
+          because the supplied Bash deployer requires one exact name-and-kind match.
+
+    - name: Stage a placeholder Provision template
+      ansible.builtin.copy:
+        dest: /var/tmp/proxmox-acceptance-provision.erb
+        mode: '0600'
+        content: |
+          <%#
+          kind: Provision
+          name: Proxmox Autoinstall Answer File
+          -%>
+          [global]
+          fqdn = "placeholder.invalid"
+      when: proxmox_answer_template_matches | length == 0
+
+    - name: Create the placeholder Provision template
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - template
+          - create
+          - --name
+          - "{{ proxmox_answer_template_name }}"
+          - --type
+          - provision
+          - --file
+          - /var/tmp/proxmox-acceptance-provision.erb
+          - --organization
+          - "{{ proxmox_test_organization }}"
+          - --location
+          - "{{ proxmox_test_location }}"
+      when: proxmox_answer_template_matches | length == 0
+      changed_when: true
+
+    - name: Stage a placeholder iPXE template
+      ansible.builtin.copy:
+        dest: /var/tmp/proxmox-acceptance-ipxe.erb
+        mode: '0600'
+        content: |
+          <%#
+          kind: PXEiPXE
+          name: Proxmox VE PXEiPXE
+          -%>
+          #!ipxe
+          exit
+      when: proxmox_ipxe_template_matches | length == 0
+
+    - name: Create the placeholder iPXE template
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - template
+          - create
+          - --name
+          - "{{ proxmox_ipxe_template_name }}"
+          - --type
+          - PXEiPXE
+          - --file
+          - /var/tmp/proxmox-acceptance-ipxe.erb
+          - --organization
+          - "{{ proxmox_test_organization }}"
+          - --location
+          - "{{ proxmox_test_location }}"
+      when: proxmox_ipxe_template_matches | length == 0
+      changed_when: true
+
+    - name: Query existing Proxmox test operating system
+      ansible.builtin.command:
+        argv: [hammer, --output, json, os, list, --per-page, all]
+      register: proxmox_operating_systems
+      changed_when: false
+
+    - name: Select the Proxmox test operating system
+      ansible.builtin.set_fact:
+        proxmox_os_matches: >-
+          {{ (proxmox_operating_systems.stdout | from_json)
+             | selectattr('Title', 'equalto', proxmox_test_os_title) | list }}
+
+    - name: Verify the Proxmox test operating system is absent or unique
+      ansible.builtin.assert:
+        that: proxmox_os_matches | length <= 1
+        fail_msg: "More than one operating system is titled {{ proxmox_test_os_title }}."
+
+    - name: Create the isolated Proxmox test operating system
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - os
+          - create
+          - --name
+          - "{{ proxmox_test_os_name }}"
+          - --major
+          - "{{ proxmox_test_os_major }}"
+          - --family
+          - Debian
+          - --architectures
+          - x86_64
+          - --provisioning-templates
+          - "{{ proxmox_answer_template_name }},{{ proxmox_ipxe_template_name }}"
+          - --organization
+          - "{{ proxmox_test_organization }}"
+          - --location
+          - "{{ proxmox_test_location }}"
+      when: proxmox_os_matches | length == 0
+      changed_when: true
+
+    - name: Query existing Proxmox test host group
+      ansible.builtin.command:
+        argv: [hammer, --output, json, hostgroup, list, --per-page, all]
+      register: proxmox_hostgroups
+      changed_when: false
+
+    - name: Select the Proxmox test host group
+      ansible.builtin.set_fact:
+        proxmox_hostgroup_matches: >-
+          {{ (proxmox_hostgroups.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_test_hostgroup_name) | list }}
+
+    - name: Verify the Proxmox test host group is absent or unique
+      ansible.builtin.assert:
+        that: proxmox_hostgroup_matches | length <= 1
+        fail_msg: "More than one host group is named {{ proxmox_test_hostgroup_name }}."
+
+    - name: Create the Proxmox test host group
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - hostgroup
+          - create
+          - --name
+          - "{{ proxmox_test_hostgroup_name }}"
+          - --operatingsystem
+          - "{{ proxmox_test_os_title }}"
+          - --subnet
+          - "{{ proxmox_test_subnet_name }}"
+          - --pxe-loader
+          - iPXE Chain UEFI
+          - --organization
+          - "{{ proxmox_test_organization }}"
+          - --location
+          - "{{ proxmox_test_location }}"
+      when: proxmox_hostgroup_matches | length == 0
+      changed_when: true
+
+    - name: Refresh the Proxmox test host group
+      ansible.builtin.command:
+        argv: [hammer, --output, json, hostgroup, list, --per-page, all]
+      register: proxmox_hostgroups
+      changed_when: false
+
+    - name: Record the Proxmox test host group ID
+      ansible.builtin.set_fact:
+        proxmox_test_hostgroup_id: >-
+          {{ ((proxmox_hostgroups.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_test_hostgroup_name) | list | first).Id }}
+
+    - name: Create the local acceptance payload when absent
+      ansible.builtin.copy:
+        src: "{{ proxmox_acceptance_fixture_example }}"
+        dest: "{{ proxmox_acceptance_fixture }}"
+        force: false
+        mode: '0600'
+      delegate_to: localhost
+      become: false
+
+    - name: Populate the local acceptance payload with test-object IDs
+      ansible.builtin.replace:
+        path: "{{ proxmox_acceptance_fixture }}"
+        regexp: '"{{ item.key }}": "REPLACE_WITH_[A-Z_]+"'
+        replace: '"{{ item.key }}": "{{ item.value }}"'
+      loop:
+        - key: organization_id
+          value: "{{ (proxmox_organization_matches | first).Id }}"
+        - key: location_id
+          value: "{{ (proxmox_location_matches | first).Id }}"
+        - key: hostgroup_id
+          value: "{{ proxmox_test_hostgroup_id }}"
+        - key: subnet_id
+          value: "{{ proxmox_test_subnet_id }}"
+      delegate_to: localhost
+      become: false
+
+    - name: Report the created test-object IDs
+      ansible.builtin.debug:
+        msg:
+          organization_id: "{{ (proxmox_organization_matches | first).Id }}"
+          location_id: "{{ (proxmox_location_matches | first).Id }}"
+          hostgroup_id: "{{ proxmox_test_hostgroup_id }}"
+          subnet_id: "{{ proxmox_test_subnet_id }}"

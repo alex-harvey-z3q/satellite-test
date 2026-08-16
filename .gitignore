@@ -6,3 +6,7 @@
 ansible/inventory.ini
 ansible/.ansible/
 ansible/collections/
+.bundle/
+vendor/bundle/
+proxmox-bootstrap-foreman*.tar.gz
+spec/fixtures/foreman-acceptance-host.json

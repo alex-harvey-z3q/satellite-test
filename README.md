@@ -13,7 +13,7 @@ Red Hat documents RHEL 9 x86_64, at least 4 CPU cores, 20 GiB RAM, 4 GiB swap, a
 
 ## Before you start
 
-You need Terraform >= 1.6, Ansible Core >= 2.15, the AWS CLI, a Red Hat subscription or active RHEL trial that includes Satellite access, and the private key for the EC2 key pair named in `terraform/terraform.tfvars`.
+You need Terraform >= 1.6, Ansible Core >= 2.15, the AWS CLI, Ruby with Bundler, a Red Hat subscription or active RHEL trial that includes Satellite access, and the private key for the EC2 key pair named in `terraform/terraform.tfvars`.
 
 `terraform/terraform.tfvars` is a local, Git-ignored infrastructure input file. Review it before applying: it selects the AWS account region, VPC/subnet, RHEL AMI, EC2 key pair, and the CIDR allowed to connect on SSH and HTTPS. It must never contain credentials or passwords.
 
@@ -87,7 +87,53 @@ aws sts get-caller-identity
 
 The configured security group opens SSH and Satellite HTTPS only to `ssh_cidrs` and `admin_cidrs` in `terraform/terraform.tfvars`. Before using Capsules, managed clients, provisioning, DHCP/DNS/TFTP, or remote execution, add the relevant ports from Red Hat’s port matrix.
 
+If the laptop's public IP changes, update both access CIDRs and apply the security-group change in one interactive command:
+
+```sh
+make update-my-ip
+```
+
 For a short-lived POC, omitting `satellite_fqdn` and `hosted_zone_id` uses the EC2 internal FQDN. For a durable deployment, set both values to create a Route 53 forward record and arrange matching reverse DNS externally. Satellite requires forward and reverse DNS resolution.
+
+## Testing the Proxmox answer adapter
+
+After deploying `proxmox/scripts/deploy-proxmox-foreman-answer.sh` to Satellite, run the safe HTTP contract suite. It makes only invalid or deliberately unregistered requests and does not change Foreman data:
+
+```sh
+make test-contract SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+```
+
+It verifies the adapter rejects incorrect methods, content types, JSON, MAC addresses, and oversized requests with the documented HTTP status codes, and that an unregistered valid MAC receives HTTP 404.
+
+The end-to-end acceptance suite creates one disposable Foreman host, requests its answer file through Apache and the adapter, validates the returned TOML, then deletes that host. The host is named `codex-proxmox-acceptance-*`; the test refuses to delete a differently named host. It is opt-in because it needs a real host group and valid Foreman API credentials.
+
+1. Create the isolated Foreman objects that the supplied Proxmox Bash scripts expect. This creates a `192.0.2.0/24` TEST-NET subnet, placeholder exact-name templates, a Proxmox VE 9 operating system, and the `Proxmox Acceptance Test` host group. It also creates or populates the ignored local acceptance payload with the resulting IDs.
+
+   ```sh
+   make proxmox-prerequisites SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+   ```
+
+   This is deliberately not a real PXE/DHCP configuration: AWS VPC does not provide a usable L2 DHCP/PXE broadcast domain. It enables end-to-end testing of the answer-file path and of the Bash template deployment, not a physical Proxmox boot.
+
+2. Run `proxmox/scripts/deploy-proxmox-foreman-templates.sh --apply` with the Satellite API credentials. The prerequisite playbook creates placeholder records so this supplied Bash script can exercise its intended update path. Set `FOREMAN_FQDN` to the Satellite FQDN and replace the FQDN placeholders in the iPXE assets before applying it.
+
+3. Supply either a Foreman API token or a username/password only in the current shell. The API endpoint defaults to `https://` plus the Terraform public IP. TLS verification is deliberately disabled by default for this self-signed POC certificate; set `FOREMAN_API_VERIFY_TLS=true` when using a trusted certificate.
+
+   ```sh
+   export FOREMAN_API_TOKEN='replace-with-a-short-lived-token'
+   export FOREMAN_ACCEPTANCE_EXPECTED_TOML_PATTERN='mailto\\s*=\\s*"operations@example\\.com"'
+   ```
+
+   Alternatively, omit `FOREMAN_API_TOKEN` and export `FOREMAN_API_USERNAME` and `FOREMAN_API_PASSWORD`. To use a payload outside the default local path, export `FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE` with its absolute path.
+
+4. Run the acceptance suite and clear credentials afterwards:
+
+   ```sh
+   make test-acceptance SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+   unset FOREMAN_API_TOKEN FOREMAN_API_USERNAME FOREMAN_API_PASSWORD
+   ```
+
+`spec/fixtures/foreman-acceptance-host.json` is Git-ignored. Do not commit it or put API credentials in it. If a test run is interrupted after creating a host, manually delete the generated `codex-proxmox-acceptance-*` host in Satellite.
 
 ## Cost and cleanup
 

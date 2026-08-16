@@ -3,10 +3,11 @@ SHELL := /bin/bash
 TF_DIR := terraform
 ANSIBLE_DIR := ansible
 INSTALLER := scripts/install.sh
+FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE ?= $(CURDIR)/spec/fixtures/foreman-acceptance-host.json
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init fmt validate preflight configure plan apply install output ssh destroy
+.PHONY: help init fmt validate preflight configure plan apply update-my-ip install output ssh destroy proxmox-prerequisites test-setup acceptance-fixture test-contract test-acceptance
 
 help: ## Show available targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -22,6 +23,7 @@ validate: init ## Validate the Terraform configuration.
 
 preflight: validate ## Run Terraform validation and an Ansible syntax check.
 	ANSIBLE_CONFIG=$(CURDIR)/$(ANSIBLE_DIR)/ansible.cfg ANSIBLE_LOCAL_TEMP=$(CURDIR)/$(ANSIBLE_DIR)/.ansible ansible-playbook --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/site.yml
+	ANSIBLE_CONFIG=$(CURDIR)/$(ANSIBLE_DIR)/ansible.cfg ANSIBLE_LOCAL_TEMP=$(CURDIR)/$(ANSIBLE_DIR)/.ansible ansible-playbook --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox_prerequisites.yml
 
 configure: ## Create the non-secret Ansible settings file when absent.
 	@if [ -f $(ANSIBLE_DIR)/group_vars/all/main.yml ]; then \
@@ -36,6 +38,14 @@ plan: preflight ## Show the proposed AWS changes.
 
 apply: preflight ## Create the AWS infrastructure (Terraform asks for confirmation).
 	terraform -chdir=$(TF_DIR) apply
+
+update-my-ip: ## Detect the current public IPv4, update SSH/HTTPS CIDRs, then apply Terraform.
+	@test -f $(TF_DIR)/terraform.tfvars || (echo "Create $(TF_DIR)/terraform.tfvars before updating access CIDRs" >&2; exit 1)
+	@public_ip="$$(curl --fail --silent --show-error https://checkip.amazonaws.com | tr -d '\n')"; \
+	[[ "$$public_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$$ ]] || (echo "Could not determine a public IPv4 address" >&2; exit 1); \
+	PUBLIC_IP="$$public_ip" ruby -e 'path = ARGV.fetch(0); content = File.read(path); ip = ENV.fetch("PUBLIC_IP"); %w[admin_cidrs ssh_cidrs].each { |key| pattern = /^(\s*#{Regexp.escape(key)}\s*=\s*)\[[^\]]*\]/; raise "Missing #{key} in terraform.tfvars" unless content.match?(pattern); content.sub!(pattern) { "#{$$1}[\"#{ip}/32\"]" } }; File.write(path, content)' $(TF_DIR)/terraform.tfvars; \
+	echo "Updated SSH and HTTPS access CIDRs to $$public_ip/32"
+	$(MAKE) apply
 
 install: configure ## Install Satellite. Requires SSH_PRIVATE_KEY_FILE, RHSM_USERNAME, and RHSM_PASSWORD.
 	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
@@ -52,3 +62,31 @@ ssh: ## Open an SSH session. Requires SSH_PRIVATE_KEY_FILE.
 
 destroy: ## Tear down the POC. Terraform asks for confirmation.
 	terraform -chdir=$(TF_DIR) destroy
+
+proxmox-prerequisites: ## Create test-only Foreman objects for the Proxmox answer-file acceptance suite.
+	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
+	@ANSIBLE_CONFIG="$(CURDIR)/$(ANSIBLE_DIR)/ansible.cfg" ANSIBLE_LOCAL_TEMP="$(CURDIR)/$(ANSIBLE_DIR)/.ansible" ansible-playbook \
+		-i "$$(terraform -chdir=$(TF_DIR) output -raw public_ip)," \
+		$(ANSIBLE_DIR)/proxmox_prerequisites.yml \
+		--user ec2-user \
+		--private-key "$(SSH_PRIVATE_KEY_FILE)" \
+		--ssh-common-args="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$(CURDIR)/$(ANSIBLE_DIR)/.ansible/known_hosts" \
+		-e 'proxmox_prerequisites_apply=true'
+
+test-setup: ## Install the Ruby dependencies used by the Serverspec suites.
+	bundle install
+
+acceptance-fixture: ## Create the ignored Foreman API test-host payload when absent.
+	@test ! -e spec/fixtures/foreman-acceptance-host.json || (echo "spec/fixtures/foreman-acceptance-host.json already exists" >&2; exit 1)
+	cp spec/fixtures/foreman-acceptance-host.json.example spec/fixtures/foreman-acceptance-host.json
+
+test-contract: test-setup ## Run safe Proxmox answer-adapter contract checks. Requires SSH_PRIVATE_KEY_FILE.
+	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
+	@TARGET_HOST="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)" SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)" bundle exec rspec spec/proxmox_foreman_contract_spec.rb
+
+test-acceptance: test-setup ## Create, validate, and delete an opt-in Foreman API test host. Requires its documented environment variables.
+	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
+	@test -f "$(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE)" || (echo "Run 'make acceptance-fixture', then edit $(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE) with this Satellite's IDs" >&2; exit 1)
+	@! rg -q 'REPLACE_WITH_' "$(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE)" || (echo "Replace every REPLACE_WITH_* value in $(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE) before running the acceptance test" >&2; exit 1)
+	@test -n "$(FOREMAN_API_TOKEN)" || { test -n "$(FOREMAN_API_USERNAME)" && test -n "$(FOREMAN_API_PASSWORD)"; } || (echo "Set FOREMAN_API_TOKEN or both FOREMAN_API_USERNAME and FOREMAN_API_PASSWORD" >&2; exit 1)
+	@TARGET_HOST="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)" SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)" FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE="$(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE)" RUN_FOREMAN_ACCEPTANCE=true bundle exec rspec spec/proxmox_foreman_acceptance_spec.rb
