@@ -1,0 +1,21 @@
+[Unit]
+Description=Proxmox auto-installer answer adapter for Foreman
+After=foreman.service
+
+[Service]
+Type=simple
+User=apache
+Group=apache
+RuntimeDirectory=proxmox-foreman-answer
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/python3 /usr/local/libexec/proxmox-foreman-answer.py --socket /run/proxmox-foreman-answer/answer.sock
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+<%#
+kind: PXEiPXE
+name: Proxmox VE PXEiPXE
+description: iPXE template for Proxmox VE unattended autoinstall. Boot payloads are served over HTTP; the prepared ISO fetches its host-specific answer through the Foreman adapter.
+-%>
+#!ipxe
+
+dhcp
+
+set base-url http://REPLACE_WITH_FOREMAN_FQDN/pub/proxmox/pve
+
+<% interface = @host.provision_interface -%>
+kernel ${base-url}/vmlinuz ramdisk_size=16777216 rw quiet splash=silent initrd=initrd.img proxmox-start-auto-installer pve-provision-mac=<%= interface.mac %>
+initrd ${base-url}/initrd.img
+initrd ${base-url}/proxmox-ve_9.2-1-auto-from-http-url.iso proxmox.iso
+boot

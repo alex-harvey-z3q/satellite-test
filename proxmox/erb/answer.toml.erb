@@ -1,0 +1,53 @@
+<%#
+kind: Provision
+name: Proxmox Autoinstall Answer File
+description: Generates a dynamic answer.toml file for Proxmox VE 9 unattended autoinstall.
+-%>
+<%
+  iface = @host.provision_interface
+-%>
+[global]
+fqdn = "<%= iface.fqdn %>"
+timezone = "UTC"
+country = "us"
+keyboard = "en-us"
+mailto = "operations@example.com"
+
+root-password-hashed = "<%= @host.root_pass %>"
+
+<%
+  postinstall_ssh_key = host_param('proxmox_postinstall_ssh_key')
+  toml_escaped_postinstall_ssh_key = postinstall_ssh_key&.gsub(/\\/) { '\\\\' }&.gsub(/"/) { '\\"' }
+-%>
+<% if postinstall_ssh_key && !postinstall_ssh_key.empty? -%>
+<%# Escape backslashes and double quotes for the TOML basic string; brackets need no escaping. -%>
+root-ssh-keys = ["<%= toml_escaped_postinstall_ssh_key %>"]
+<% end -%>
+
+[network]
+source = "from-answer"
+cidr = "<%= iface.ip %>/<%= iface.subnet.cidr %>"
+gateway = "<%= iface.subnet.gateway %>"
+dns = "<%= iface.subnet.dns_servers.first %>"
+
+[network.filter]
+ID_NET_NAME_MAC = "*<%= iface.mac.delete(':').downcase %>"
+
+<%
+  # Use the exact disk (sda, sdb etc) when proxmox_os_disk override is set.
+  # Otherwise, select the devices matching DELL*BOSS*.
+  os_disk = host_param('proxmox_os_disk')
+-%>
+[disk-setup]
+filesystem = "zfs"
+<% if os_disk && !os_disk.empty? -%>
+disk-list = ["<%= os_disk %>"]
+<% else -%>
+filter.ID_MODEL = "DELL*BOSS*"
+<% end -%>
+
+[disk-setup.zfs]
+raid = "raid0"
+
+[post-installation-webhook]
+url = "<%= foreman_url('built') %>"

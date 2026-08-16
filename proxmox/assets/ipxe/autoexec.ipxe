@@ -1,0 +1,7 @@
+#!ipxe
+
+# This shared script runs after Foreman-managed DHCP serves ipxe-x64.efi to a
+# known Build host. Foreman resolves the host by MAC and returns the associated
+# iPXE template; unknown hosts continue to the existing GRUB discovery path.
+dhcp || shell
+chain http://REPLACE_WITH_FOREMAN_FQDN/unattended/iPXE?bootstrap=1 || shell
