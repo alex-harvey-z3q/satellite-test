@@ -2,6 +2,8 @@
 satellite_version: "6.18"
 satellite_fqdn: "satellite-poc.example.com"
 remove_rhui_client: false
+# Required by this POC's Apache-to-Unix-socket Proxmox adapter.
+satellite_disable_selinux_for_proxmox_poc: true
 
 # Retrieved from `terraform -chdir=terraform output -raw pulp_volume_id` by the runner.
 pulp_volume_id: "vol-0123456789abcdef0"
