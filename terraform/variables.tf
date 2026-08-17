@@ -1,6 +1,10 @@
 variable "aws_region" { type = string }
 variable "vpc_id" { type = string }
 variable "subnet_id" { type = string }
+variable "provisioning_subnet_cidr" {
+  type        = string
+  description = "Unused CIDR in vpc_id for the dedicated Proxmox provisioning-test subnet."
+}
 variable "ami_id" {
   type        = string
   description = "An x86_64 RHEL 9 AMI to which this account is entitled."

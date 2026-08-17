@@ -1,6 +1,9 @@
 aws_region  = "ap-southeast-2"
 vpc_id      = "vpc-0123456789abcdef0"
 subnet_id   = "subnet-0123456789abcdef0"
+# An unused CIDR within vpc_id. The example is appropriate only when it does
+# not overlap existing VPC subnets.
+provisioning_subnet_cidr = "172.31.48.0/20"
 ami_id      = "ami-0123456789abcdef0" # RHEL 9 x86_64 AMI
 
 # Existing EC2 key pair; its matching private key is used by scripts/install.sh.

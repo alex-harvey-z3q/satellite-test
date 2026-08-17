@@ -5,6 +5,26 @@ locals {
   )
 }
 
+data "aws_subnet" "satellite" {
+  id = var.subnet_id
+}
+
+data "aws_vpc" "selected" {
+  id = var.vpc_id
+}
+
+resource "aws_subnet" "provisioning" {
+  vpc_id                  = var.vpc_id
+  cidr_block              = var.provisioning_subnet_cidr
+  availability_zone       = data.aws_subnet.satellite.availability_zone
+  map_public_ip_on_launch = false
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-provisioning"
+    Role = "provisioning-test"
+  })
+}
+
 resource "aws_iam_role" "ssm" {
   name = "${var.name_prefix}-ssm"
   assume_role_policy = jsonencode({
@@ -45,6 +65,30 @@ resource "aws_security_group" "satellite" {
       protocol    = "tcp"
       cidr_blocks = var.ssh_cidrs
     }
+  }
+
+  ingress {
+    description = "DHCP requests from the provisioning subnet"
+    from_port   = 67
+    to_port     = 67
+    protocol    = "udp"
+    cidr_blocks = [var.provisioning_subnet_cidr]
+  }
+
+  ingress {
+    description = "TFTP from the provisioning subnet"
+    from_port   = 69
+    to_port     = 69
+    protocol    = "udp"
+    cidr_blocks = [var.provisioning_subnet_cidr]
+  }
+
+  ingress {
+    description = "iPXE HTTP from the provisioning subnet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [var.provisioning_subnet_cidr]
   }
 
   egress {
