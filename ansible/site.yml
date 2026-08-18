@@ -151,16 +151,81 @@
         state: mounted
 
   tasks:
+    - name: Check whether Satellite is already installed
+      ansible.builtin.command:
+        argv: [rpm, --quiet, --query, satellite]
+      register: satellite_package
+      changed_when: false
+      failed_when: false
+
+    - name: Check Proxmox provisioning package prerequisites
+      ansible.builtin.command:
+        argv: [rpm, --quiet, --query, dhcp-server, ipxe-bootimgs-x86]
+      register: proxmox_provisioning_packages
+      changed_when: false
+      failed_when: false
+
+    - name: Install Proxmox provisioning prerequisites before Satellite package protection
+      ansible.builtin.dnf:
+        name:
+          - dhcp-server
+          - ipxe-bootimgs-x86
+        state: present
+      when:
+        - satellite_package.rc != 0
+        - proxmox_provisioning_packages.rc != 0
+
+    - name: Install missing Proxmox prerequisites through Satellite maintenance
+      ansible.builtin.command:
+        argv: [foreman-maintain, packages, install, --assumeyes, dhcp-server, ipxe-bootimgs-x86]
+      when:
+        - satellite_package.rc == 0
+        - proxmox_provisioning_packages.rc != 0
+      changed_when: true
+
     - name: Install the Satellite installer package
       ansible.builtin.dnf:
         name: satellite
         state: present
+
+    - name: Locate the dedicated provisioning interface
+      ansible.builtin.shell: >-
+        ip -o -4 addr show |
+        awk '$4 ~ /^{{ satellite_provisioning_interface_ip | regex_escape }}\// { print $2; exit }'
+      args:
+        executable: /bin/bash
+      register: satellite_provisioning_interface
+      changed_when: false
+
+    - name: Verify the dedicated provisioning interface is attached
+      ansible.builtin.assert:
+        that: satellite_provisioning_interface.stdout | length > 0
+        fail_msg: >-
+          Terraform's provisioning ENI ({{ satellite_provisioning_interface_ip }}) is not visible.
+          Apply Terraform and wait for the ENI attachment before running make install.
 
     - name: Run the Satellite installer once
       ansible.builtin.shell: >-
         satellite-installer --scenario satellite
         --foreman-initial-organization "{{ satellite_initial_organization | default('Default Organization') }}"
         --foreman-initial-location "{{ satellite_initial_location | default('Default Location') }}"
+        --foreman-proxy-tftp true
+        --foreman-proxy-dhcp true
+        --foreman-proxy-dhcp-interface "{{ satellite_provisioning_interface.stdout }}"
+        --foreman-proxy-dhcp-network "{{ satellite_provisioning_subnet_network }}"
+        --foreman-proxy-dhcp-netmask "{{ satellite_provisioning_subnet_mask }}"
+        --foreman-proxy-dhcp-gateway "{{ satellite_provisioning_subnet_gateway }}"
+        --foreman-proxy-dhcp-range "{{ satellite_provisioning_dhcp_range_start }} {{ satellite_provisioning_dhcp_range_end }}"
+        --foreman-proxy-dhcp-subnets "{{ satellite_provisioning_subnet_cidr }}"
         |& tee {{ satellite_log }}
       args:
         executable: /bin/bash
+
+    - name: Stage the UEFI iPXE image for the supplied Proxmox DHCP deployer
+      ansible.builtin.copy:
+        src: /usr/share/ipxe/ipxe-x86_64.efi
+        dest: /var/lib/tftpboot/ipxe.efi
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'

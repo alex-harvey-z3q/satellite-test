@@ -13,6 +13,13 @@ ansible_dir="$root_dir/ansible"
 host="$(terraform -chdir="$tf_dir" output -raw public_ip)"
 fqdn="$(terraform -chdir="$tf_dir" output -raw satellite_fqdn)"
 pulp_volume_id="$(terraform -chdir="$tf_dir" output -raw pulp_volume_id)"
+provisioning_subnet_cidr="$(terraform -chdir="$tf_dir" output -raw provisioning_subnet_cidr)"
+provisioning_subnet_network="$(terraform -chdir="$tf_dir" output -raw provisioning_subnet_network)"
+provisioning_subnet_mask="$(terraform -chdir="$tf_dir" output -raw provisioning_subnet_mask)"
+provisioning_subnet_gateway="$(terraform -chdir="$tf_dir" output -raw provisioning_subnet_gateway)"
+provisioning_interface_ip="$(terraform -chdir="$tf_dir" output -raw provisioning_interface_private_ip)"
+provisioning_dhcp_range_start="$(terraform -chdir="$tf_dir" output -raw provisioning_dhcp_range_start)"
+provisioning_dhcp_range_end="$(terraform -chdir="$tf_dir" output -raw provisioning_dhcp_range_end)"
 
 if [[ -z "$host" ]]; then
   echo "No public IP was output. Use a reachable private address or run Ansible through SSM." >&2
@@ -43,4 +50,11 @@ ansible-playbook -i "$inventory_file" "$ansible_dir/site.yml" \
   --private-key "$SSH_PRIVATE_KEY_FILE" \
   --ssh-common-args="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$known_hosts_file" \
   -e "satellite_fqdn=$fqdn" \
-  -e "pulp_volume_id=$pulp_volume_id"
+  -e "pulp_volume_id=$pulp_volume_id" \
+  -e "satellite_provisioning_subnet_cidr=$provisioning_subnet_cidr" \
+  -e "satellite_provisioning_subnet_network=$provisioning_subnet_network" \
+  -e "satellite_provisioning_subnet_mask=$provisioning_subnet_mask" \
+  -e "satellite_provisioning_subnet_gateway=$provisioning_subnet_gateway" \
+  -e "satellite_provisioning_interface_ip=$provisioning_interface_ip" \
+  -e "satellite_provisioning_dhcp_range_start=$provisioning_dhcp_range_start" \
+  -e "satellite_provisioning_dhcp_range_end=$provisioning_dhcp_range_end"

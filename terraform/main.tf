@@ -25,6 +25,23 @@ resource "aws_subnet" "provisioning" {
   })
 }
 
+resource "aws_network_interface" "provisioning" {
+  subnet_id       = aws_subnet.provisioning.id
+  private_ips     = [cidrhost(var.provisioning_subnet_cidr, 10)]
+  security_groups = [aws_security_group.satellite.id]
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-provisioning"
+    Role = "provisioning-server-interface"
+  })
+}
+
+resource "aws_network_interface_attachment" "provisioning" {
+  instance_id          = aws_instance.satellite.id
+  network_interface_id = aws_network_interface.provisioning.id
+  device_index         = 1
+}
+
 resource "aws_iam_role" "ssm" {
   name = "${var.name_prefix}-ssm"
   assume_role_policy = jsonencode({
