@@ -51,7 +51,7 @@ aws sts get-caller-identity
    export RHSM_USERNAME RHSM_PASSWORD
    ```
 
-5. Install Satellite. `SSH_PRIVATE_KEY_FILE` must be the absolute path of the private key matching the `key_name` configured in `terraform/terraform.tfvars`. The `install` target creates the non-secret Ansible settings file when needed, installs its required collection, registers the host with Red Hat Subscription Management, mounts the Pulp disk, and runs `satellite-installer`.
+5. Install Satellite. `SSH_PRIVATE_KEY_FILE` must be the absolute path of the private key matching the `key_name` configured in `terraform/terraform.tfvars`. The `install` target creates the non-secret Ansible settings file when needed, installs its required collection, registers the host with Red Hat Subscription Management, mounts the Pulp disk, installs the DHCP and iPXE prerequisites before Satellite protects package changes, and runs `satellite-installer` with the Foreman Proxy DHCP and TFTP features configured for the dedicated provisioning interface.
 
    ```sh
    make install SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
@@ -102,21 +102,24 @@ After `make install`, the following is the complete Proxmox deployment workflow.
 Set the three secrets in the current shell only:
 
 ```sh
-export FOREMAN_USER='your-satellite-api-user'
+export FOREMAN_USER='admin' # Or another Satellite API user with the required permissions.
 read -rs "FOREMAN_PASSWORD?Satellite API password: "
 export FOREMAN_PASSWORD
-read -rs "PVE_DHCP_OMAPI_SECRET?DHCP OMAPI secret: "
-export PVE_DHCP_OMAPI_SECRET
+# Generate this once; retain it in a password manager for future DHCP changes.
+export PVE_DHCP_OMAPI_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
 ```
 
-Before deployment, replace `REPLACE_WITH_FOREMAN_FQDN` in `proxmox/assets/ipxe/autoexec.ipxe` and `proxmox/erb/ipxe.erb` with the Satellite FQDN. Then run:
+`PVE_DHCP_OMAPI_SECRET` is a locally generated shared secret for ISC DHCP and Foreman's Smart Proxy; it is not supplied by Red Hat or AWS. Do not commit it or place it in `terraform.tfvars`.
+
+Configure the iPXE assets from Terraform's Satellite FQDN, then run:
 
 ```sh
+make proxmox-configure-fqdn
 make proxmox-deploy SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
 unset FOREMAN_PASSWORD PVE_DHCP_OMAPI_SECRET
 ```
 
-`proxmox-deploy` runs the supporting Foreman prerequisites, then all three supplied Bash deployers in this order: DHCP/TFTP/iPXE (including assigning the local Smart Proxy as the DHCP proxy for the Terraform subnet), Foreman templates, and the answer adapter. The DHCP script automatically receives Terraform's `provisioning_subnet_cidr`; do not set it yourself. `make install` persists SELinux disabled for this POC because the adapter’s Apache Unix-socket proxy requires it.
+`proxmox-configure-fqdn` is idempotent and only replaces the two `REPLACE_WITH_FOREMAN_FQDN` placeholders. `proxmox-deploy` and `proxmox-test-bootstrap` run it automatically. `proxmox-deploy` then runs the supporting Foreman prerequisites and all three supplied Bash deployers in this order: DHCP/TFTP/iPXE (including assigning the local Smart Proxy as the DHCP proxy for the Terraform subnet), Foreman templates, and the answer adapter. The DHCP script automatically receives Terraform's `provisioning_subnet_cidr`; do not set it yourself. `make install` persists SELinux disabled for this POC because the adapter’s Apache Unix-socket proxy requires it.
 
 Then run the safe HTTP contract suite. It makes only invalid or deliberately unregistered requests and does not change Foreman data:
 

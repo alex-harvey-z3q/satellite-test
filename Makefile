@@ -7,7 +7,7 @@ FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE ?= $(CURDIR)/spec/fixtures/foreman-acceptan
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init fmt validate preflight configure plan apply update-my-ip install output ssh destroy proxmox-answer proxmox-prerequisites proxmox-templates proxmox-test-bootstrap proxmox-dhcp proxmox-deploy test-setup acceptance-fixture test-contract test-acceptance
+.PHONY: help init fmt validate preflight configure plan apply update-my-ip install output ssh destroy proxmox-configure-fqdn proxmox-answer proxmox-prerequisites proxmox-templates proxmox-test-bootstrap proxmox-dhcp proxmox-deploy test-setup acceptance-fixture test-contract test-acceptance
 
 help: ## Show available targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -63,9 +63,14 @@ ssh: ## Open an SSH session. Requires SSH_PRIVATE_KEY_FILE.
 destroy: ## Tear down the POC. Terraform asks for confirmation.
 	terraform -chdir=$(TF_DIR) destroy
 
+proxmox-configure-fqdn: ## Replace the iPXE FQDN placeholders using Terraform's Satellite FQDN.
+	@set -e; fqdn="$$(terraform -chdir=$(TF_DIR) output -raw satellite_fqdn)"; \
+	test -n "$$fqdn" || { echo "Terraform did not return a Satellite FQDN" >&2; exit 1; }; \
+	SATELLITE_FQDN="$$fqdn" ruby -e 'fqdn = ENV.fetch("SATELLITE_FQDN"); paths = %w[proxmox/assets/ipxe/autoexec.ipxe proxmox/erb/ipxe.erb]; paths.each do |path|; content = File.read(path); if content.include?("REPLACE_WITH_FOREMAN_FQDN"); File.write(path, content.gsub("REPLACE_WITH_FOREMAN_FQDN", fqdn)); elsif !content.include?(fqdn); abort("#{path} contains neither the placeholder nor Terraform\047s Satellite FQDN; refusing to overwrite it"); end; end'
+
 proxmox-answer: ## Deploy the Proxmox answer adapter. Requires SSH_PRIVATE_KEY_FILE.
 	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
-	@host="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)"; \
+	@set -e; host="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)"; \
 	ssh() { command ssh -i "$(SSH_PRIVATE_KEY_FILE)" -o StrictHostKeyChecking=accept-new -o User=ec2-user "$$@"; }; \
 	scp() { command scp -i "$(SSH_PRIVATE_KEY_FILE)" -o StrictHostKeyChecking=accept-new -o User=ec2-user "$$@"; }; \
 	export -f ssh scp; \
@@ -102,10 +107,11 @@ proxmox-templates: ## Update Proxmox Foreman templates. Requires SSH_PRIVATE_KEY
 	(umask 077; printf 'FOREMAN_FQDN=%q\nFOREMAN_USER=%q\nFOREMAN_PASSWORD=%q\n' "$$fqdn" "$${FOREMAN_USER}" "$${FOREMAN_PASSWORD}" > "$$env_file"); \
 	ssh -i "$(SSH_PRIVATE_KEY_FILE)" -o StrictHostKeyChecking=accept-new ec2-user@"$$host" "mkdir -p '$$remote_dir'"; \
 	scp -i "$(SSH_PRIVATE_KEY_FILE)" -o StrictHostKeyChecking=accept-new -r proxmox/assets proxmox/erb proxmox/scripts "$$env_file" ec2-user@"$$host":"$$remote_dir/"; \
-	ssh -tt -i "$(SSH_PRIVATE_KEY_FILE)" -o StrictHostKeyChecking=accept-new ec2-user@"$$host" "set -e; . '$$remote_dir/foreman.env'; rm -f '$$remote_dir/foreman.env'; bash '$$remote_dir/scripts/deploy-proxmox-foreman-templates.sh' --apply"; \
+	ssh -tt -i "$(SSH_PRIVATE_KEY_FILE)" -o StrictHostKeyChecking=accept-new ec2-user@"$$host" "set -e; set -a; . '$$remote_dir/foreman.env'; set +a; rm -f '$$remote_dir/foreman.env'; bash '$$remote_dir/scripts/deploy-proxmox-foreman-templates.sh' --apply"; \
 	ssh -i "$(SSH_PRIVATE_KEY_FILE)" -o StrictHostKeyChecking=accept-new ec2-user@"$$host" "rm -rf '$$remote_dir'"
 
 proxmox-test-bootstrap: ## Create test records, update templates, and deploy the adapter without DHCP changes.
+	$(MAKE) proxmox-configure-fqdn
 	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-templates SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-answer SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
@@ -115,7 +121,7 @@ proxmox-dhcp: ## Configure DHCP/TFTP/iPXE and assign its proxy to the provisioni
 	@test -n "$${PVE_DHCP_OMAPI_SECRET:-}" || (echo "Export PVE_DHCP_OMAPI_SECRET" >&2; exit 1)
 	@test -n "$${FOREMAN_USER:-}" || (echo "Export FOREMAN_USER for a Satellite API user" >&2; exit 1)
 	@test -n "$${FOREMAN_PASSWORD:-}" || (echo "Export FOREMAN_PASSWORD for that user's password" >&2; exit 1)
-	@host="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)"; \
+	@set -e; host="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)"; \
 	fqdn="$$(terraform -chdir=$(TF_DIR) output -raw satellite_fqdn)"; \
 	subnet_cidr="$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_cidr)"; \
 	subnet_name="$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_name)"; \
@@ -130,9 +136,10 @@ proxmox-dhcp: ## Configure DHCP/TFTP/iPXE and assign its proxy to the provisioni
 	(umask 077; printf 'FOREMAN_FQDN=%q\nFOREMAN_USER=%q\nFOREMAN_PASSWORD=%q\n' "$$fqdn" "$${FOREMAN_USER}" "$${FOREMAN_PASSWORD}" > "$$env_file"); \
 	ssh ec2-user@"$$host" "mkdir -p '$$remote_dir'"; \
 	scp proxmox/scripts/configure-foreman-ipxe-dhcp.sh "$$env_file" ec2-user@"$$host":"$$remote_dir/"; \
-	ssh -tt ec2-user@"$$host" "set -e; . '$$remote_dir/foreman.env'; rm -f '$$remote_dir/foreman.env'; bash '$$remote_dir/configure-foreman-ipxe-dhcp.sh' --configure-foreman --subnet '$$subnet_name'; rm -rf '$$remote_dir'"
+	ssh -tt ec2-user@"$$host" "set -e; set -a; . '$$remote_dir/foreman.env'; set +a; rm -f '$$remote_dir/foreman.env'; bash '$$remote_dir/configure-foreman-ipxe-dhcp.sh' --configure-foreman --subnet '$$subnet_name'; rm -rf '$$remote_dir'"
 
 proxmox-deploy: ## Run Proxmox prerequisites and all three supplied Bash deployers in dependency order.
+	$(MAKE) proxmox-configure-fqdn
 	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-dhcp SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-templates SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
