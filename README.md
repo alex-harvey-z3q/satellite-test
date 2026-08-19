@@ -43,11 +43,12 @@ aws sts get-caller-identity
    make apply
    ```
 
-4. Supply the two Red Hat credentials only in the current shell. `read -s` prevents the password from being echoed; do not put either value in `terraform.tfvars`, `main.yml`, a command line, or Git.
+4. Supply the two Red Hat credentials in the current shell. `read -s` prevents the password from being echoed; do not put either value in `terraform.tfvars`, `main.yml`, a command line, or Git.
 
    ```sh
    read -r "RHSM_USERNAME?Red Hat login: "
    read -rs "RHSM_PASSWORD?Red Hat password: "
+   echo
    export RHSM_USERNAME RHSM_PASSWORD
    ```
 
@@ -99,12 +100,11 @@ For a short-lived POC, omitting `satellite_fqdn` and `hosted_zone_id` uses the E
 
 After `make install`, the following is the complete Proxmox deployment workflow. Terraform creates a dedicated private provisioning subnet in the Satellite VPC. Its AWS address range is real and Foreman is configured to use it, which makes the server-side Foreman, DHCP, TFTP, iPXE, template, and answer-adapter configuration meaningful. AWS still owns DHCP for EC2 instances, so it cannot PXE-boot an EC2 test client from this server.
 
-Set the three secrets in the current shell only:
+For this disposable POC, Satellite is installed with the documented local API credential `admin` / `Welcome1`. It is deliberately predictable so the deployment automation can run unattended; never use it outside this POC. Set the DHCP shared secret in the current shell only:
 
 ```sh
-export FOREMAN_USER='admin' # Or another Satellite API user with the required permissions.
-read -rs "FOREMAN_PASSWORD?Satellite API password: "
-export FOREMAN_PASSWORD
+export FOREMAN_USER='admin'
+export FOREMAN_PASSWORD='Welcome1'
 # Generate this once; retain it in a password manager for future DHCP changes.
 export PVE_DHCP_OMAPI_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
 ```

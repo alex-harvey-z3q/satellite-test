@@ -6,6 +6,10 @@ set -euo pipefail
 : "${RHSM_USERNAME:?Set RHSM_USERNAME to your Red Hat login.}"
 : "${RHSM_PASSWORD:?Set RHSM_PASSWORD to your Red Hat password.}"
 
+# This is a disposable proof of concept. Override only when intentionally testing
+# a different credential; do not use this default outside the POC.
+satellite_admin_password="${SATELLITE_ADMIN_PASSWORD:-Welcome1}"
+
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tf_dir="$root_dir/terraform"
 ansible_dir="$root_dir/ansible"
@@ -50,6 +54,7 @@ ansible-playbook -i "$inventory_file" "$ansible_dir/site.yml" \
   --private-key "$SSH_PRIVATE_KEY_FILE" \
   --ssh-common-args="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$known_hosts_file" \
   -e "satellite_fqdn=$fqdn" \
+  -e "satellite_initial_admin_password=$satellite_admin_password" \
   -e "pulp_volume_id=$pulp_volume_id" \
   -e "satellite_provisioning_subnet_cidr=$provisioning_subnet_cidr" \
   -e "satellite_provisioning_subnet_network=$provisioning_subnet_network" \

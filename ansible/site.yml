@@ -209,8 +209,10 @@
         satellite-installer --scenario satellite
         --foreman-initial-organization "{{ satellite_initial_organization | default('Default Organization') }}"
         --foreman-initial-location "{{ satellite_initial_location | default('Default Location') }}"
+        --foreman-initial-admin-password {{ satellite_initial_admin_password | quote }}
         --foreman-proxy-tftp true
         --foreman-proxy-dhcp true
+        --foreman-proxy-dhcp-listen-on both
         --foreman-proxy-dhcp-interface "{{ satellite_provisioning_interface.stdout }}"
         --foreman-proxy-dhcp-network "{{ satellite_provisioning_subnet_network }}"
         --foreman-proxy-dhcp-netmask "{{ satellite_provisioning_subnet_mask }}"
@@ -220,6 +222,7 @@
         |& tee {{ satellite_log }}
       args:
         executable: /bin/bash
+      no_log: true
 
     - name: Stage the UEFI iPXE image for the supplied Proxmox DHCP deployer
       ansible.builtin.copy:
