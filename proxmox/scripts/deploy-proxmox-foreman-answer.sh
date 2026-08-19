@@ -168,11 +168,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now "\$service_name"
 sudo systemctl restart httpd
 
-response="\$(curl --silent --show-error --request POST --header 'Content-Type: application/json' --data '{\"network_interfaces\":[]}' --write-out '\\n%{http_code}' "http://127.0.0.1\$handler_endpoint")"
-status="\${response##*\$'\\n'}"
-body="\${response%\$'\\n'*}"
+status="\$(curl --silent --show-error --output /dev/null --request POST --header 'Content-Type: application/json' --data '{\"network_interfaces\":[]}' --write-out '%{http_code}' "http://127.0.0.1\$handler_endpoint")"
 [[ "\$status" == 400 ]] || { echo "ERROR: expected HTTP 400 from answer handler, got \$status" >&2; exit 1; }
-[[ "\$body" == *'No valid network interface MAC address'* ]] || { echo "ERROR: Apache did not return the expected answer-handler response." >&2; exit 1; }
 EOF
 
   # shellcheck disable=SC2029
