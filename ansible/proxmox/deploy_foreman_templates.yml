@@ -1,0 +1,105 @@
+---
+- name: Deploy Proxmox Foreman templates
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    proxmox_template_targets:
+      - name: Proxmox Autoinstall Answer File
+        kind: provision
+        source: "{{ playbook_dir }}/../../proxmox/erb/answer.toml.erb"
+      - name: Proxmox VE PXEiPXE
+        kind: iPXE
+        source: "{{ playbook_dir }}/../../proxmox/erb/ipxe.erb"
+
+  pre_tasks:
+    - name: Require Foreman API inputs
+      ansible.builtin.assert:
+        that:
+          - proxmox_foreman_fqdn is defined
+          - proxmox_foreman_fqdn | length > 0
+          - proxmox_foreman_api_user is defined
+          - proxmox_foreman_api_user | length > 0
+          - proxmox_foreman_api_password is defined
+          - proxmox_foreman_api_password | length > 0
+      no_log: true
+
+    - name: Verify the template source files
+      ansible.builtin.stat:
+        path: "{{ item.source }}"
+      delegate_to: localhost
+      become: false
+      loop: "{{ proxmox_template_targets }}"
+      register: proxmox_template_sources
+
+    - name: Require the template source files
+      ansible.builtin.assert:
+        that: item.stat.isreg | default(false)
+        fail_msg: "Missing template source {{ item.item.source }}."
+      loop: "{{ proxmox_template_sources.results }}"
+
+  tasks:
+    - name: Query Foreman provisioning templates
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_foreman_fqdn }}/api/provisioning_templates?per_page=9999"
+        method: GET
+        user: "{{ proxmox_foreman_api_user }}"
+        password: "{{ proxmox_foreman_api_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+      register: proxmox_foreman_templates
+      no_log: true
+
+    - name: Select exact Foreman template matches
+      ansible.builtin.set_fact:
+        proxmox_answer_template_matches: >-
+          {{ proxmox_foreman_templates.json.results
+             | selectattr('name', 'equalto', 'Proxmox Autoinstall Answer File')
+             | selectattr('template_kind_name', 'equalto', 'provision') | list }}
+        proxmox_ipxe_template_matches: >-
+          {{ proxmox_foreman_templates.json.results
+             | selectattr('name', 'equalto', 'Proxmox VE PXEiPXE')
+             | selectattr('template_kind_name', 'equalto', 'iPXE') | list }}
+
+    - name: Require exactly one template of each expected name and kind
+      ansible.builtin.assert:
+        that:
+          - proxmox_answer_template_matches | length == 1
+          - proxmox_ipxe_template_matches | length == 1
+        fail_msg: >-
+          Expected exactly one Provision answer template and one iPXE template.
+
+    - name: Read the deployed Foreman templates
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_foreman_fqdn }}/api/provisioning_templates/{{ item.id }}"
+        method: GET
+        user: "{{ proxmox_foreman_api_user }}"
+        password: "{{ proxmox_foreman_api_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+      loop:
+        - id: "{{ (proxmox_answer_template_matches | first).id }}"
+          source: "{{ playbook_dir }}/../../proxmox/erb/answer.toml.erb"
+        - id: "{{ (proxmox_ipxe_template_matches | first).id }}"
+          source: "{{ playbook_dir }}/../../proxmox/erb/ipxe.erb"
+      register: proxmox_deployed_templates
+      no_log: true
+
+    - name: Update template bodies only when they differ
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_foreman_fqdn }}/api/provisioning_templates/{{ item.item.id }}"
+        method: PUT
+        user: "{{ proxmox_foreman_api_user }}"
+        password: "{{ proxmox_foreman_api_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          provisioning_template:
+            template: "{{ lookup('ansible.builtin.file', item.item.source) }}"
+        status_code: 200
+      loop: "{{ proxmox_deployed_templates.results }}"
+      when: item.json.template != lookup('ansible.builtin.file', item.item.source)
+      no_log: true

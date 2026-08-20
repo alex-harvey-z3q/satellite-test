@@ -7,7 +7,7 @@ FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE ?= $(CURDIR)/spec/fixtures/foreman-acceptan
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init fmt validate preflight configure plan apply update-my-ip install output ssh destroy proxmox-configure-fqdn proxmox-answer proxmox-prerequisites proxmox-templates proxmox-test-bootstrap proxmox-dhcp proxmox-deploy test-setup acceptance-fixture test-contract test-acceptance
+.PHONY: help init fmt validate preflight configure plan apply update-my-ip install output ssh destroy proxmox-configure-fqdn proxmox-answer proxmox-prerequisites proxmox-templates proxmox-test-bootstrap proxmox-dhcp proxmox-deploy proxmox-ansible-deploy test-setup acceptance-fixture test-contract test-acceptance
 
 help: ## Show available targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -147,6 +147,35 @@ proxmox-deploy: ## Run Proxmox prerequisites and all three supplied Bash deploye
 	$(MAKE) proxmox-templates SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-answer SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
+
+proxmox-ansible-deploy: ## Run the three Ansible Proxmox deployers in dependency order. Requires SSH_PRIVATE_KEY_FILE, FOREMAN_USER, FOREMAN_PASSWORD, and PVE_DHCP_OMAPI_SECRET.
+	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
+	@test -n "$${PVE_DHCP_OMAPI_SECRET:-}" || (echo "Export PVE_DHCP_OMAPI_SECRET" >&2; exit 1)
+	@test -n "$${FOREMAN_USER:-}" || (echo "Export FOREMAN_USER for a Satellite API user" >&2; exit 1)
+	@test -n "$${FOREMAN_PASSWORD:-}" || (echo "Export FOREMAN_PASSWORD for that user's password" >&2; exit 1)
+	$(MAKE) proxmox-configure-fqdn
+	@set -e; \
+	host="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)"; \
+	fqdn="$$(terraform -chdir=$(TF_DIR) output -raw satellite_fqdn)"; \
+	subnet_cidr="$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_cidr)"; \
+	subnet_name="$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_name)"; \
+	ANSIBLE_CONFIG="$(CURDIR)/$(ANSIBLE_DIR)/ansible.cfg"; export ANSIBLE_CONFIG; \
+	ansible=(ansible-playbook -i "$$host," --user ec2-user --private-key "$(SSH_PRIVATE_KEY_FILE)" --ssh-common-args="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$(CURDIR)/$(ANSIBLE_DIR)/.ansible/known_hosts"); \
+	"$${ansible[@]}" \
+		-e "proxmox_foreman_fqdn=$$fqdn" \
+		-e "proxmox_provisioning_subnet_cidr=$$subnet_cidr" \
+		-e "proxmox_dhcp_omapi_secret=$${PVE_DHCP_OMAPI_SECRET}" \
+		-e "proxmox_foreman_api_user=$${FOREMAN_USER}" \
+		-e "proxmox_foreman_api_password=$${FOREMAN_PASSWORD}" \
+		-e "{\"proxmox_configure_foreman_dhcp\": true, \"proxmox_foreman_subnet_names\": [\"$$subnet_name\"]}" \
+		$(ANSIBLE_DIR)/proxmox/configure_foreman_ipxe_dhcp.yml; \
+	"$${ansible[@]}" \
+		-e "proxmox_foreman_fqdn=$$fqdn" \
+		-e "proxmox_foreman_api_user=$${FOREMAN_USER}" \
+		-e "proxmox_foreman_api_password=$${FOREMAN_PASSWORD}" \
+		$(ANSIBLE_DIR)/proxmox/deploy_foreman_templates.yml; \
+	"$${ansible[@]}" \
+		$(ANSIBLE_DIR)/proxmox/deploy_foreman_answer.yml
 
 test-setup: ## Install the Ruby dependencies used by the Serverspec suites.
 	bundle install

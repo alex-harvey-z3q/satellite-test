@@ -1,0 +1,210 @@
+---
+- name: Configure Foreman iPXE and ISC DHCP
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    proxmox_tftp_root: /var/lib/tftpboot
+    proxmox_dhcp_config: /etc/dhcp/dhcpd.conf
+    proxmox_dhcp_include: /etc/dhcp/dhcpd.foreman-ipxe.conf
+    proxmox_proxy_dhcp_settings: /etc/foreman-proxy/settings.d/dhcp.yml
+    proxmox_proxy_isc_settings: /etc/foreman-proxy/settings.d/dhcp_isc.yml
+    proxmox_omapi_key_name: foreman-proxy-omapi
+    proxmox_omapi_key_algorithm: hmac-md5
+    proxmox_omapi_port: 7911
+    proxmox_configure_foreman_dhcp: false
+    proxmox_foreman_subnet_names: []
+    proxmox_foreman_all_subnets: false
+
+  pre_tasks:
+    - name: Require the DHCP deployment inputs
+      ansible.builtin.assert:
+        that:
+          - proxmox_foreman_fqdn is defined
+          - proxmox_foreman_fqdn | length > 0
+          - proxmox_provisioning_subnet_cidr is defined
+          - proxmox_dhcp_omapi_secret is defined
+          - proxmox_dhcp_omapi_secret | length > 0
+          - "'\"' not in proxmox_dhcp_omapi_secret"
+          - "'\n' not in proxmox_dhcp_omapi_secret"
+        fail_msg: >-
+          Set proxmox_foreman_fqdn, proxmox_provisioning_subnet_cidr, and a
+          quote- and newline-free proxmox_dhcp_omapi_secret.
+      no_log: true
+
+    - name: Validate the provisioning subnet CIDR
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - import ipaddress, sys; ipaddress.ip_network(sys.argv[1], strict=False)
+          - "{{ proxmox_provisioning_subnet_cidr }}"
+      changed_when: false
+
+    - name: Validate the optional Foreman DHCP proxy configuration
+      ansible.builtin.assert:
+        that:
+          - not (proxmox_configure_foreman_dhcp | bool) or
+            (proxmox_foreman_api_user | default('') | length > 0 and
+             proxmox_foreman_api_password | default('') | length > 0)
+          - not (proxmox_configure_foreman_dhcp | bool) or
+            (proxmox_foreman_all_subnets | bool or proxmox_foreman_subnet_names | length > 0)
+          - not (proxmox_foreman_all_subnets | bool and proxmox_foreman_subnet_names | length > 0)
+      no_log: true
+
+  tasks:
+    - name: Install the iPXE bootstrap script
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../proxmox/assets/ipxe/autoexec.ipxe"
+        dest: "{{ proxmox_tftp_root }}/autoexec.ipxe"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Verify the installed iPXE EFI binary
+      ansible.builtin.stat:
+        path: "{{ proxmox_tftp_root }}/ipxe.efi"
+      register: proxmox_ipxe_efi
+
+    - name: Require the installed iPXE EFI binary
+      ansible.builtin.assert:
+        that: proxmox_ipxe_efi.stat.isreg | default(false)
+        fail_msg: "{{ proxmox_tftp_root }}/ipxe.efi is required before enabling iPXE Chain UEFI."
+
+    - name: Create the iPXE Chain UEFI symlink
+      ansible.builtin.file:
+        src: ipxe.efi
+        dest: "{{ proxmox_tftp_root }}/ipxe-x64.efi"
+        state: link
+
+    - name: Configure the Smart Proxy DHCP provider
+      ansible.builtin.copy:
+        dest: "{{ proxmox_proxy_dhcp_settings }}"
+        owner: root
+        group: foreman-proxy
+        mode: '0640'
+        content: |
+          ---
+          :enabled: true
+          :use_provider: dhcp_isc
+          :server: 127.0.0.1
+          :subnets:
+            - {{ proxmox_provisioning_subnet_cidr }}
+
+    - name: Configure Smart Proxy OMAPI credentials
+      ansible.builtin.copy:
+        dest: "{{ proxmox_proxy_isc_settings }}"
+        owner: root
+        group: foreman-proxy
+        mode: '0640'
+        content: |
+          ---
+          :enabled: true
+          :key_name: {{ proxmox_omapi_key_name }}
+          :key_secret: {{ proxmox_dhcp_omapi_secret }}
+          :key_algorithm: {{ proxmox_omapi_key_algorithm }}
+          :omapi_port: {{ proxmox_omapi_port }}
+      no_log: true
+
+    - name: Configure the DHCP OMAPI listener
+      ansible.builtin.copy:
+        dest: "{{ proxmox_dhcp_include }}"
+        owner: root
+        group: foreman-proxy
+        mode: '0640'
+        content: |
+          # Managed by Ansible. Foreman Smart Proxy uses this OMAPI key to
+          # create and remove DHCP reservations for managed Build hosts.
+          key "{{ proxmox_omapi_key_name }}" {
+            algorithm {{ proxmox_omapi_key_algorithm }};
+            secret "{{ proxmox_dhcp_omapi_secret }}";
+          }
+          omapi-port {{ proxmox_omapi_port }};
+      no_log: true
+
+    - name: Include the Foreman iPXE DHCP configuration
+      ansible.builtin.lineinfile:
+        path: "{{ proxmox_dhcp_config }}"
+        line: 'include "{{ proxmox_dhcp_include }}";'
+        state: present
+
+    - name: Protect the DHCP configuration
+      ansible.builtin.file:
+        path: "{{ proxmox_dhcp_config }}"
+        group: foreman-proxy
+        mode: '0640'
+
+    - name: Validate the DHCP configuration
+      ansible.builtin.command:
+        argv: [dhcpd, -t, -cf, "{{ proxmox_dhcp_config }}"]
+      changed_when: false
+
+    - name: Enable and restart DHCP and Foreman Smart Proxy
+      ansible.builtin.service:
+        name: "{{ item }}"
+        enabled: true
+        state: restarted
+      loop: [dhcpd, foreman-proxy]
+
+    - name: Query Foreman Smart Proxies
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_foreman_fqdn }}/api/smart_proxies?search=name%20%3D%20{{ proxmox_foreman_fqdn | urlencode }}&per_page=100"
+        method: GET
+        user: "{{ proxmox_foreman_api_user }}"
+        password: "{{ proxmox_foreman_api_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+      register: proxmox_smart_proxies
+      when: proxmox_configure_foreman_dhcp | bool
+      no_log: true
+
+    - name: Require one matching Foreman Smart Proxy
+      ansible.builtin.assert:
+        that: proxmox_smart_proxies.json.results | length == 1
+      when: proxmox_configure_foreman_dhcp | bool
+
+    - name: Query Foreman subnets
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_foreman_fqdn }}/api/subnets?per_page=9999"
+        method: GET
+        user: "{{ proxmox_foreman_api_user }}"
+        password: "{{ proxmox_foreman_api_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+      register: proxmox_foreman_subnets
+      when: proxmox_configure_foreman_dhcp | bool
+      no_log: true
+
+    - name: Select the requested Foreman subnets
+      ansible.builtin.set_fact:
+        proxmox_selected_foreman_subnets: >-
+          {{ proxmox_foreman_subnets.json.results if proxmox_foreman_all_subnets | bool else
+             (proxmox_foreman_subnets.json.results
+              | selectattr('name', 'in', proxmox_foreman_subnet_names) | list) }}
+      when: proxmox_configure_foreman_dhcp | bool
+
+    - name: Require every requested Foreman subnet to exist once
+      ansible.builtin.assert:
+        that: proxmox_selected_foreman_subnets | length == proxmox_foreman_subnet_names | length
+      when:
+        - proxmox_configure_foreman_dhcp | bool
+        - not (proxmox_foreman_all_subnets | bool)
+
+    - name: Assign the Smart Proxy as DHCP proxy to the selected subnets
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_foreman_fqdn }}/api/subnets/{{ item.id }}"
+        method: PUT
+        user: "{{ proxmox_foreman_api_user }}"
+        password: "{{ proxmox_foreman_api_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          subnet:
+            dhcp_id: "{{ proxmox_smart_proxies.json.results[0].id }}"
+        status_code: 200
+      loop: "{{ proxmox_selected_foreman_subnets | default([]) }}"
+      when: proxmox_configure_foreman_dhcp | bool
+      no_log: true
