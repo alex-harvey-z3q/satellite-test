@@ -14,4 +14,5 @@ output "provisioning_interface_id" { value = aws_network_interface.provisioning.
 output "provisioning_interface_private_ip" { value = aws_network_interface.provisioning.private_ip }
 output "provisioning_dhcp_range_start" { value = cidrhost(aws_subnet.provisioning.cidr_block, 100) }
 output "provisioning_dhcp_range_end" { value = cidrhost(aws_subnet.provisioning.cidr_block, 200) }
+output "provisioning_acceptance_test_ip" { value = cidrhost(aws_subnet.provisioning.cidr_block, 250) }
 output "ssm_start_session" { value = "aws ssm start-session --target ${aws_instance.satellite.id} --region ${var.aws_region}" }

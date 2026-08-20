@@ -78,7 +78,7 @@ proxmox-answer: ## Deploy the Proxmox answer adapter. Requires SSH_PRIVATE_KEY_F
 
 proxmox-prerequisites: ## Create Foreman test objects using Terraform's dedicated provisioning subnet.
 	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
-	@subnet_name="$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_name)"; \
+	@set -e; subnet_name="$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_name)"; \
 	ANSIBLE_CONFIG="$(CURDIR)/$(ANSIBLE_DIR)/ansible.cfg" ANSIBLE_LOCAL_TEMP="$(CURDIR)/$(ANSIBLE_DIR)/.ansible" ansible-playbook \
 		-i "$$(terraform -chdir=$(TF_DIR) output -raw public_ip)," \
 		$(ANSIBLE_DIR)/proxmox_prerequisites.yml \
@@ -91,7 +91,8 @@ proxmox-prerequisites: ## Create Foreman test objects using Terraform's dedicate
 		-e "proxmox_test_subnet_network=$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_network)" \
 		-e "proxmox_test_subnet_mask=$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_mask)" \
 		-e "proxmox_test_subnet_gateway=$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_gateway)" \
-		-e "proxmox_test_subnet_dns=$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_dns)"
+		-e "proxmox_test_subnet_dns=$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_dns)" \
+		-e "proxmox_test_acceptance_ip=$$(terraform -chdir=$(TF_DIR) output -raw provisioning_acceptance_test_ip)"
 
 proxmox-templates: ## Update Proxmox Foreman templates. Requires SSH_PRIVATE_KEY_FILE, FOREMAN_USER, and FOREMAN_PASSWORD.
 	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
@@ -115,6 +116,7 @@ proxmox-test-bootstrap: ## Create test records, update templates, and deploy the
 	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-templates SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-answer SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
+	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 
 proxmox-dhcp: ## Configure DHCP/TFTP/iPXE and assign its proxy to the provisioning subnet. Requires SSH_PRIVATE_KEY_FILE, FOREMAN_USER, FOREMAN_PASSWORD, and PVE_DHCP_OMAPI_SECRET.
 	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
@@ -144,6 +146,7 @@ proxmox-deploy: ## Run Proxmox prerequisites and all three supplied Bash deploye
 	$(MAKE) proxmox-dhcp SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-templates SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-answer SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
+	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 
 test-setup: ## Install the Ruby dependencies used by the Serverspec suites.
 	bundle install
@@ -154,11 +157,12 @@ acceptance-fixture: ## Create the ignored Foreman API test-host payload when abs
 
 test-contract: test-setup ## Run safe Proxmox answer-adapter contract checks. Requires SSH_PRIVATE_KEY_FILE.
 	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
-	@TARGET_HOST="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)" SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)" bundle exec rspec spec/proxmox_foreman_contract_spec.rb
+	@TARGET_HOST="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)" SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)" SATELLITE_FQDN="$$(terraform -chdir=$(TF_DIR) output -raw satellite_fqdn)" PROVISIONING_SUBNET_NAME="$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_name)" PROVISIONING_SUBNET_CIDR="$$(terraform -chdir=$(TF_DIR) output -raw provisioning_subnet_cidr)" bundle exec rspec spec/proxmox_deployment_spec.rb spec/proxmox_foreman_contract_spec.rb
 
-test-acceptance: test-setup ## Create, validate, and delete an opt-in Foreman API test host. Requires its documented environment variables.
+test-acceptance: test-setup ## Create, validate, and delete an opt-in Foreman API test host. Requires FOREMAN_USER and FOREMAN_PASSWORD.
 	@test -n "$(SSH_PRIVATE_KEY_FILE)" || (echo "Set SSH_PRIVATE_KEY_FILE to the private key for the EC2 key pair" >&2; exit 1)
 	@test -f "$(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE)" || (echo "Run 'make acceptance-fixture', then edit $(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE) with this Satellite's IDs" >&2; exit 1)
 	@! rg -q 'REPLACE_WITH_' "$(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE)" || (echo "Replace every REPLACE_WITH_* value in $(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE) before running the acceptance test" >&2; exit 1)
-	@test -n "$(FOREMAN_API_TOKEN)" || { test -n "$(FOREMAN_API_USERNAME)" && test -n "$(FOREMAN_API_PASSWORD)"; } || (echo "Set FOREMAN_API_TOKEN or both FOREMAN_API_USERNAME and FOREMAN_API_PASSWORD" >&2; exit 1)
-	@TARGET_HOST="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)" SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)" FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE="$(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE)" RUN_FOREMAN_ACCEPTANCE=true bundle exec rspec spec/proxmox_foreman_acceptance_spec.rb
+	@test -n "$${FOREMAN_USER:-}" || (echo "Export FOREMAN_USER for a Satellite API user" >&2; exit 1)
+	@test -n "$${FOREMAN_PASSWORD:-}" || (echo "Export FOREMAN_PASSWORD for that user's password" >&2; exit 1)
+	@TARGET_HOST="$$(terraform -chdir=$(TF_DIR) output -raw public_ip)" SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)" FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE="$(FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE)" FOREMAN_API_USERNAME="$${FOREMAN_USER}" FOREMAN_API_PASSWORD="$${FOREMAN_PASSWORD}" RUN_FOREMAN_ACCEPTANCE=true bundle exec rspec spec/proxmox_foreman_acceptance_spec.rb

@@ -3,6 +3,7 @@
   "organization_id": "REPLACE_WITH_ORGANIZATION_ID",
   "location_id": "REPLACE_WITH_LOCATION_ID",
   "hostgroup_id": "REPLACE_WITH_HOSTGROUP_ID",
+  "architecture_id": "REPLACE_WITH_ARCHITECTURE_ID",
   "build": false,
   "managed": true,
   "interfaces_attributes": [
@@ -13,7 +14,9 @@
       "managed": true,
       "primary": true,
       "provision": true,
-      "subnet_id": "REPLACE_WITH_SUBNET_ID"
+      "subnet_id": "REPLACE_WITH_SUBNET_ID",
+      "domain_id": "REPLACE_WITH_DOMAIN_ID",
+      "ip": "REPLACE_WITH_TEST_IP"
     }
   ]
 }

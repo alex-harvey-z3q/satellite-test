@@ -1,8 +1,9 @@
 require "json"
+require "base64"
 require "net/http"
+require "net/ssh"
 require "openssl"
 require "securerandom"
-require "shellwords"
 require "toml-rb"
 require "uri"
 
@@ -27,14 +28,10 @@ RSpec.describe "the Proxmox Foreman answer-adapter acceptance flow" do
   end
 
   it "returns a valid TOML answer file for the newly-created Foreman host" do
-    result = command(
-      "curl --silent --show-error --include --request POST --header 'Content-Type: application/json' " \
-      "--data #{Shellwords.escape(JSON.generate(network_interfaces: [{ mac: @mac }]))} http://127.0.0.1/proxmox-answer"
-    )
+    response = answer_adapter_request(JSON.generate(network_interfaces: [{ mac: @mac }]))
 
-    expect(result.exit_status).to eq 0
-    headers, body = result.stdout.split(/\r?\n\r?\n/, 2)
-    expect(headers).to match(%r{^HTTP/.* 200}i)
+    headers, body = response.split(/\r?\n\r?\n/, 2)
+    expect(headers).to match(%r{^HTTP/.* 200}i), "Adapter response body: #{body}"
     expect(headers).to match(/^Content-Type:\s*application\/toml/i)
     expect(body).to match(@expected_toml_pattern)
     expect { TomlRB.parse(body) }.not_to raise_error
@@ -49,7 +46,9 @@ RSpec.describe "the Proxmox Foreman answer-adapter acceptance flow" do
     raise "FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE must contain __TEST_HOSTNAME__ and __TEST_MAC__" unless payload.include?(@hostname) && payload.include?(@mac)
 
     parsed_payload = JSON.parse(payload)
-    parsed_payload["build"] = false
+    # Foreman renders unattended provisioning templates only while the host is
+    # in build mode. The test host is deleted immediately after this request.
+    parsed_payload["build"] = true
     response = foreman_request(Net::HTTP::Post, "/api/hosts", JSON.generate(parsed_payload))
     raise "Foreman host creation failed (HTTP #{response.code}): #{response.body}" unless response.code == "201"
 
@@ -60,7 +59,7 @@ RSpec.describe "the Proxmox Foreman answer-adapter acceptance flow" do
     raise "Refusing to delete a non-test host" unless @hostname.start_with?("codex-proxmox-acceptance-")
 
     response = foreman_request(Net::HTTP::Delete, "/api/hosts/#{@host_id}")
-    raise "Foreman test-host deletion failed (HTTP #{response.code}): #{response.body}" unless response.code.between?(200, 299)
+    raise "Foreman test-host deletion failed (HTTP #{response.code}): #{response.body}" unless response.code.to_i.between?(200, 299)
   ensure
     @host_id = nil
   end
@@ -84,5 +83,28 @@ RSpec.describe "the Proxmox Foreman answer-adapter acceptance flow" do
       use_ssl: uri.scheme == "https",
       verify_mode: ENV["FOREMAN_API_VERIFY_TLS"] == "true" ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
     ) { |http| http.request(request) }
+  end
+
+  def answer_adapter_request(payload)
+    remote_payload = "/tmp/proxmox-answer-acceptance-#{SecureRandom.hex(8)}.json"
+    encoded_payload = Base64.strict_encode64(payload)
+
+    response = Net::SSH.start(
+      ENV.fetch("TARGET_HOST"),
+      ENV.fetch("SPEC_SSH_USER", "ec2-user"),
+      keys: [ENV.fetch("SSH_PRIVATE_KEY_FILE")],
+      verify_host_key: :never,
+      encryption: %w[aes256-ctr aes192-ctr aes128-ctr]
+    ) do |ssh|
+      command = "printf %s #{encoded_payload} | base64 --decode > #{remote_payload} && " \
+                "curl --silent --show-error --include --request POST " \
+                "--header 'Content-Type: application/json' --data-binary @#{remote_payload} " \
+                "http://127.0.0.1/proxmox-answer; status=$?; rm -f #{remote_payload}; exit $status"
+      ssh.exec!(command)
+    end
+
+    raise "Could not start adapter request" if response.nil?
+
+    response
   end
 end

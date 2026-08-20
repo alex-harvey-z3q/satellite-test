@@ -12,10 +12,15 @@
     proxmox_test_subnet_mask: "255.255.255.0"
     proxmox_test_subnet_gateway: "192.0.2.1"
     proxmox_test_subnet_dns: "192.0.2.53"
+    proxmox_test_acceptance_ip: "192.0.2.250"
+    proxmox_test_domain: "proxmox-acceptance.test"
     proxmox_allow_routable_test_subnet: false
     proxmox_test_os_name: "proxmox-ve"
     proxmox_test_os_major: "9"
     proxmox_test_os_release_name: "acceptance-test"
+    proxmox_test_medium_name: "Debian mirror"
+    proxmox_test_partition_table_name: "Preseed default"
+    proxmox_test_root_password: "Welcome1"
     proxmox_test_hostgroup_name: "Proxmox AWS Acceptance Test"
     proxmox_answer_template_name: "Proxmox Autoinstall Answer File"
     proxmox_ipxe_template_name: "Proxmox VE PXEiPXE"
@@ -83,6 +88,51 @@
           ((proxmox_architectures.stdout | from_json)
           | selectattr('Name', 'equalto', 'x86_64') | list | length) == 1
         fail_msg: Satellite must provide the x86_64 architecture.
+
+    - name: Record the x86_64 architecture ID
+      ansible.builtin.set_fact:
+        proxmox_test_architecture_id: >-
+          {{ ((proxmox_architectures.stdout | from_json)
+             | selectattr('Name', 'equalto', 'x86_64') | list | first).Id }}
+
+    - name: Query existing Proxmox test domain
+      ansible.builtin.command:
+        argv: [hammer, --output, json, domain, list, --per-page, '9999']
+      register: proxmox_domains
+      changed_when: false
+
+    - name: Select the Proxmox test domain
+      ansible.builtin.set_fact:
+        proxmox_domain_matches: >-
+          {{ (proxmox_domains.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_test_domain) | list }}
+
+    - name: Create the Proxmox test domain
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - domain
+          - create
+          - --name
+          - "{{ proxmox_test_domain }}"
+          - --organizations
+          - "{{ proxmox_test_organization }}"
+          - --locations
+          - "{{ proxmox_test_location }}"
+      when: proxmox_domain_matches | length == 0
+      changed_when: true
+
+    - name: Refresh the Proxmox test domain
+      ansible.builtin.command:
+        argv: [hammer, --output, json, domain, list, --per-page, '9999']
+      register: proxmox_domains
+      changed_when: false
+
+    - name: Record the Proxmox test domain ID
+      ansible.builtin.set_fact:
+        proxmox_test_domain_id: >-
+          {{ ((proxmox_domains.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_test_domain) | list | first).Id }}
 
     - name: Query existing Proxmox test subnet
       ansible.builtin.command:
@@ -286,6 +336,22 @@
              | selectattr('Title', 'equalto', proxmox_test_os_name ~ ' ' ~ proxmox_test_os_major)
              | list | first).Id }}
 
+    - name: Associate the test operating system with its build requirements
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - os
+          - update
+          - --id
+          - "{{ proxmox_test_os_id }}"
+          - --media
+          - "{{ proxmox_test_medium_name }}"
+          - --partition-tables
+          - "{{ proxmox_test_partition_table_name }}"
+          - --provisioning-templates
+          - "{{ proxmox_answer_template_name }},{{ proxmox_ipxe_template_name }}"
+      changed_when: false
+
     - name: Query existing Proxmox test host group
       ansible.builtin.command:
         argv: [hammer, --output, json, hostgroup, list, --per-page, '9999']
@@ -336,11 +402,68 @@
           {{ ((proxmox_hostgroups.stdout | from_json)
              | selectattr('Name', 'equalto', proxmox_test_hostgroup_name) | list | first).Id }}
 
-    - name: Create the local acceptance payload when absent
+    - name: Set the host-group build defaults required for unattended provisioning
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - hostgroup
+          - update
+          - --id
+          - "{{ proxmox_test_hostgroup_id }}"
+          - --medium
+          - "{{ proxmox_test_medium_name }}"
+          - --partition-table
+          - "{{ proxmox_test_partition_table_name }}"
+          - --root-password
+          - "{{ proxmox_test_root_password }}"
+      changed_when: false
+
+    - name: Query the Proxmox provision-template combinations
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - --output
+          - json
+          - template
+          - combination
+          - list
+          - --provisioning-template
+          - "{{ proxmox_answer_template_name }}"
+      register: proxmox_template_combinations
+      changed_when: false
+
+    - name: Select the Proxmox host-group template combination
+      ansible.builtin.set_fact:
+        proxmox_template_combination_matches: >-
+          {{ (proxmox_template_combinations.stdout | from_json)
+             | selectattr('Hostgroup.Id', 'equalto', proxmox_test_hostgroup_id | int) | list }}
+
+    - name: Verify the Proxmox host-group template combination is absent or unique
+      ansible.builtin.assert:
+        that: proxmox_template_combination_matches | length <= 1
+        fail_msg: >-
+          More than one provision-template combination exists for
+          {{ proxmox_test_hostgroup_name }}.
+
+    - name: Create the Proxmox host-group template combination
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - template
+          - combination
+          - create
+          - --provisioning-template
+          - "{{ proxmox_answer_template_name }}"
+          - --hostgroup
+          - "{{ proxmox_test_hostgroup_name }}"
+      when: proxmox_template_combination_matches | length == 0
+      changed_when: true
+
+    - name: Regenerate the local acceptance payload from its test fixture
       ansible.builtin.copy:
         src: "{{ proxmox_acceptance_fixture_example }}"
         dest: "{{ proxmox_acceptance_fixture }}"
-        force: false
+        force: true
         mode: '0600'
       delegate_to: localhost
       become: false
@@ -359,6 +482,12 @@
           value: "{{ proxmox_test_hostgroup_id }}"
         - key: subnet_id
           value: "{{ proxmox_test_subnet_id }}"
+        - key: architecture_id
+          value: "{{ proxmox_test_architecture_id }}"
+        - key: domain_id
+          value: "{{ proxmox_test_domain_id }}"
+        - key: ip
+          value: "{{ proxmox_test_acceptance_ip }}"
       delegate_to: localhost
       become: false
 

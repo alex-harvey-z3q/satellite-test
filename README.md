@@ -119,7 +119,7 @@ make proxmox-deploy SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
 unset FOREMAN_PASSWORD PVE_DHCP_OMAPI_SECRET
 ```
 
-`proxmox-configure-fqdn` is idempotent and only replaces the two `REPLACE_WITH_FOREMAN_FQDN` placeholders. `proxmox-deploy` and `proxmox-test-bootstrap` run it automatically. `proxmox-deploy` then runs the supporting Foreman prerequisites and all three supplied Bash deployers in this order: DHCP/TFTP/iPXE (including assigning the local Smart Proxy as the DHCP proxy for the Terraform subnet), Foreman templates, and the answer adapter. The DHCP script automatically receives Terraform's `provisioning_subnet_cidr`; do not set it yourself. `make install` persists SELinux disabled for this POC because the adapter’s Apache Unix-socket proxy requires it.
+`proxmox-configure-fqdn` is idempotent and only replaces the two `REPLACE_WITH_FOREMAN_FQDN` placeholders. `proxmox-deploy` and `proxmox-test-bootstrap` run it automatically. `proxmox-deploy` then runs the supporting Foreman prerequisites and all three supplied Bash deployers in this order: DHCP/TFTP/iPXE (including assigning the local Smart Proxy as the DHCP proxy for the Terraform subnet), Foreman templates, and the answer adapter. It finishes by re-running the idempotent prerequisites to associate the deployed provision template with the test host group. The DHCP script automatically receives Terraform's `provisioning_subnet_cidr`; do not set it yourself. `make install` persists SELinux disabled for this POC because the adapter’s Apache Unix-socket proxy requires it.
 
 Then run the safe HTTP contract suite. It makes only invalid or deliberately unregistered requests and does not change Foreman data:
 
@@ -127,7 +127,7 @@ Then run the safe HTTP contract suite. It makes only invalid or deliberately unr
 make test-contract SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
 ```
 
-It verifies the adapter rejects incorrect methods, content types, JSON, MAC addresses, and oversized requests with the documented HTTP status codes, and that an unregistered valid MAC receives HTTP 404.
+It verifies the deployed DHCP, Smart Proxy, iPXE, Apache, answer-adapter, systemd, Foreman subnet-proxy, host-group template-combination, and exact template-body state. It also verifies the adapter rejects incorrect methods, content types, JSON, MAC addresses, and oversized requests with the documented HTTP status codes, and that an unregistered valid MAC receives HTTP 404.
 
 The end-to-end acceptance suite creates one disposable Foreman host, requests its answer file through Apache and the adapter, validates the returned TOML, then deletes that host. The host is named `codex-proxmox-acceptance-*`; the test refuses to delete a differently named host. It is opt-in because it needs a real host group and valid Foreman API credentials.
 
@@ -139,20 +139,19 @@ The end-to-end acceptance suite creates one disposable Foreman host, requests it
 
    It enables end-to-end testing of the answer-file path and Bash template deployment without changing the Satellite host's DHCP service.
 
-2. Supply either a Foreman API token or a username/password only in the current shell. The API endpoint defaults to `https://` plus the Terraform public IP. TLS verification is deliberately disabled by default for this self-signed POC certificate; set `FOREMAN_API_VERIFY_TLS=true` when using a trusted certificate.
+2. The acceptance suite uses the same `FOREMAN_USER` and `FOREMAN_PASSWORD` set above. Its API endpoint defaults to `https://` plus the Terraform public IP. TLS verification is deliberately disabled by default for this self-signed POC certificate; set `FOREMAN_API_VERIFY_TLS=true` when using a trusted certificate.
 
    ```sh
-   export FOREMAN_API_TOKEN='replace-with-a-short-lived-token'
    export FOREMAN_ACCEPTANCE_EXPECTED_TOML_PATTERN='mailto\\s*=\\s*"operations@example\\.com"'
    ```
 
-   Alternatively, omit `FOREMAN_API_TOKEN` and export `FOREMAN_API_USERNAME` and `FOREMAN_API_PASSWORD`. To use a payload outside the default local path, export `FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE` with its absolute path.
+   To use a payload outside the default local path, export `FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE` with its absolute path.
 
 3. Run the acceptance suite and clear credentials afterwards:
 
    ```sh
    make test-acceptance SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-   unset FOREMAN_API_TOKEN FOREMAN_API_USERNAME FOREMAN_API_PASSWORD
+   unset FOREMAN_USER FOREMAN_PASSWORD
    ```
 
 `spec/fixtures/foreman-acceptance-host.json` is Git-ignored. Do not commit it or put API credentials in it. If a test run is interrupted after creating a host, manually delete the generated `codex-proxmox-acceptance-*` host in Satellite.
