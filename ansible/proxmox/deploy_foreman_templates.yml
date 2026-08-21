@@ -44,7 +44,7 @@
     - name: Require the Foreman templates created by the prerequisite playbook
       ansible.builtin.assert:
         that: item.rc == 0
-        fail_msg: "Template {{ item.item.name }} is missing; run make proxmox-prerequisites first."
+        fail_msg: "Template {{ item.item.name }} is missing; run make hammer first."
       loop: "{{ proxmox_deployed_templates.results }}"
 
     - name: Stage changed Proxmox Foreman template bodies

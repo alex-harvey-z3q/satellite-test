@@ -52,10 +52,10 @@ aws sts get-caller-identity
    export RHSM_USERNAME RHSM_PASSWORD
    ```
 
-5. Install Satellite. `SSH_PRIVATE_KEY_FILE` must be the absolute path of the private key matching the `key_name` configured in `terraform/terraform.tfvars`. The `install` target creates the non-secret Ansible settings file when needed, installs its required collection, registers the host with Red Hat Subscription Management, mounts the Pulp disk, and runs `satellite-installer` with the Foreman Proxy DHCP and TFTP features configured for the dedicated provisioning interface.
+5. Install base Satellite. `SSH_PRIVATE_KEY_FILE` must be the absolute path of the private key matching the `key_name` configured in `terraform/terraform.tfvars`. The `satellite-installer` target creates the non-secret Ansible settings file when needed, installs its required collection, registers the host with Red Hat Subscription Management, mounts the Pulp disk, and runs `satellite-installer` with the Foreman Proxy DHCP and TFTP features configured for the dedicated provisioning interface.
 
    ```sh
-   make install SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+   make satellite-installer SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
    ```
 
    The install can take tens of minutes. It writes `/var/log/satellite-installer-poc.log` on the EC2 host. `satellite-installer` is safe to run again to reconcile its configuration.
@@ -130,49 +130,58 @@ For a short-lived POC, omitting `satellite_fqdn` and `hosted_zone_id` uses the E
 
   Makefile
      |
-     +-- make install -----------------------------------------------------+
-     |                                                                     |
-     |   scripts/install.sh --> ansible/site.yml                           |
-     |                           |                                         |
-     |                           +-- files/foreman-installer/              |
-     |                           |     custom-hiera.yaml                   |
-     |                           |     modules/proxmox_answer/             |
-     |                           |       manifests/init.pp                 |
-     |                           |                                         |
-     |                           +-- satellite-installer ------------------+-->
-     |                                      installer-managed DHCP/TFTP/Smart Proxy
-     |                                      and 04-proxmox-answer.conf
+     +-- make satellite-installer ------------------------------------------->
+     |   scripts/install.sh --> ansible/site.yml --> satellite-installer
+     |                                           --> base Satellite
+     |                                               DHCP/TFTP/Smart Proxy
      |
-     +-- make proxmox-deploy ----------------------------------------------+
-         |                                                                 |
-         +-- ansible/proxmox_prerequisites.yml --> Hammer -----------------+-->
-         |                                      Foreman domain, subnet, host group,
-         |                                      template records and associations
+     +-- make satellite-customise ------------------------------------------->
+     |   ansible/proxmox/customise.yml
+     |      +-- files/foreman-installer/custom-hiera.yaml
+     |      +-- files/foreman-installer/modules/proxmox_answer/
+     |      |     manifests/init.pp
+     |      +-- satellite-installer --> POC Apache /proxmox-answer route
+     |
+     +-- make custom -------------------------------------------------------->
          |
+         +-- deploy_foreman_answer.yml
+               +-- proxmox/files/.../proxmox-foreman-answer.py
+               +-- proxmox/files/.../proxmox-foreman-answer.service
+                     --> systemd --> Unix socket
+     |
+     +-- make hammer -------------------------------------------------------->
+         +-- ansible/proxmox_prerequisites.yml --> Hammer --> Foreman domain,
+         |                                                subnet, host group,
+         |                                              template associations
+         |
+     +-- make deploy-answer-files ------------------------------------------->
          +-- ansible/proxmox/deploy.yml
-                |
-                +-- deploy_foreman_templates.yml
-                |     +-- proxmox/erb/answer.toml.erb -- Hammer --> Foreman template
-                |     +-- proxmox/erb/ipxe.erb        -- Hammer --> Foreman template
-                |
-                +-- deploy_foreman_answer.yml
-                      +-- proxmox/files/usr/local/libexec/
-                      |     proxmox-foreman-answer.py --> /usr/local/libexec/
-                      +-- proxmox/files/etc/systemd/system/
-                            proxmox-foreman-answer.service --> systemd --> Unix socket
+              +-- deploy_foreman_templates.yml
+                   +-- proxmox/erb/answer.toml.erb -- Hammer --> Foreman template
+                   +-- proxmox/erb/ipxe.erb        -- Hammer --> Foreman template
 ```
 
-DHCP, TFTP, Smart Proxy, and the Apache route are configured by `satellite-installer` and its Puppet catalog. The Proxmox deployment playbook uses Hammer to manage only Foreman objects; it does not modify the DHCP or Smart Proxy configuration files directly.
+`make satellite-installer` configures DHCP, TFTP, and Smart Proxy through `satellite-installer`. `make satellite-customise` applies the POC-specific Apache route through the same installer and its Puppet catalog. `make custom` installs the standalone answer service. The Hammer targets manage only Foreman objects and templates; they do not modify DHCP or Smart Proxy configuration files directly.
 
-After `make install`, deploy the Proxmox proof of concept with:
+After `make satellite-installer`, the base Satellite configuration contains no
+Proxmox-specific Apache route or answer service. Apply the POC in its
+technology-layer order:
 
 ```sh
-make proxmox-deploy SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make satellite-customise SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make custom SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make hammer SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make deploy-answer-files SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
 ```
+
+The targets are intentionally independent. Run them in the order shown above:
+the answer route should exist before the answer service is exposed, and Hammer
+must create the template records before `make deploy-answer-files` can update
+their bodies.
 
 Terraform creates the dedicated provisioning subnet and allows DHCP, TFTP, and HTTP boot only from that subnet. Satellite Installer owns the local DHCP and TFTP services; the prerequisite playbook manages the Foreman domain, subnet-to-Smart-Proxy association, operating system, host group, and template associations through Hammer. The Proxmox template bodies are stored in Satellite itself.
 
-The answer adapter retains the required `http://<Satellite-FQDN>/proxmox-answer` endpoint. Its Unix-socket service is routed by an Apache fragment created by a POC Puppet class declared in `custom-hiera.yaml` and applied by `satellite-installer`. No project automation edits `dhcpd.conf`, Smart Proxy YAML, `/var/lib/tftpboot`, or Satellite’s generated `05-foreman.conf`.
+The answer adapter retains the required `http://<Satellite-FQDN>/proxmox-answer` endpoint. Its Unix-socket service is routed by an Apache fragment created by a POC Puppet class declared in `custom-hiera.yaml` and applied during `make satellite-customise`. No project automation edits `dhcpd.conf`, Smart Proxy YAML, `/var/lib/tftpboot`, or Satellite’s generated `05-foreman.conf`.
 
 The supported deployment renders the Satellite FQDN into the iPXE template in memory; it does not modify the tracked template source.
 

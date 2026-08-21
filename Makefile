@@ -21,7 +21,7 @@ endef
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init fmt validate preflight configure plan apply update-my-ip install output ssh destroy proxmox-prerequisites proxmox-deploy proxmox-ansible-deploy test-setup acceptance-fixture test-contract test-acceptance
+.PHONY: help init fmt validate preflight configure plan apply update-my-ip satellite-installer output ssh destroy satellite-customise custom hammer deploy-answer-files test-setup acceptance-fixture test-contract test-acceptance
 
 help: ## Show available targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -38,6 +38,7 @@ validate: init ## Validate the Terraform configuration.
 preflight: validate ## Run Terraform validation and an Ansible syntax check.
 	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/site.yml
 	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox_prerequisites.yml
+	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/customise.yml
 	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/deploy.yml
 
 configure: ## Create the non-secret Ansible settings file when absent.
@@ -52,7 +53,7 @@ plan: preflight ## Show the proposed AWS changes.
 	$(TERRAFORM) plan -input=false
 
 apply: preflight ## Create the AWS infrastructure (Terraform asks for confirmation).
-	$(TERRAFORM) apply
+	$(TERRAFORM) apply -auto-approve
 
 update-my-ip: ## Detect the current public IPv4, update SSH/HTTPS CIDRs, then apply Terraform.
 	@test -f $(TF_DIR)/terraform.tfvars || (echo "Create $(TF_DIR)/terraform.tfvars before updating access CIDRs" >&2; exit 1)
@@ -62,7 +63,7 @@ update-my-ip: ## Detect the current public IPv4, update SSH/HTTPS CIDRs, then ap
 	echo "Updated SSH and HTTPS access CIDRs to $$public_ip/32"
 	$(MAKE) apply
 
-install: configure ## Install Satellite. Requires SSH_PRIVATE_KEY_FILE, RHSM_USERNAME, and RHSM_PASSWORD.
+satellite-installer: configure ## Install base Satellite. Requires SSH_PRIVATE_KEY_FILE, RHSM_USERNAME, and RHSM_PASSWORD.
 	$(require_ssh_private_key)
 	@test -n "$(RHSM_USERNAME)" || (echo "Set RHSM_USERNAME to your Red Hat login" >&2; exit 1)
 	@test -n "$(RHSM_PASSWORD)" || (echo "Set RHSM_PASSWORD to your Red Hat password" >&2; exit 1)
@@ -78,7 +79,21 @@ ssh: ## Open an SSH session. Requires SSH_PRIVATE_KEY_FILE.
 destroy: ## Tear down the POC. Terraform asks for confirmation.
 	$(TERRAFORM) destroy
 
-proxmox-prerequisites: ## Create Foreman test objects using Terraform's dedicated provisioning subnet.
+satellite-customise: ## Apply the POC-specific Apache route through Satellite Installer.
+	$(require_ssh_private_key)
+	@$(ANSIBLE_PLAYBOOK) \
+		-i "$$($(call tf_output,public_ip))," \
+		$(ANSIBLE_REMOTE_ARGS) \
+		$(ANSIBLE_DIR)/proxmox/customise.yml
+
+custom: ## Install the POC-specific answer-adapter service.
+	$(require_ssh_private_key)
+	@$(ANSIBLE_PLAYBOOK) \
+		-i "$$($(call tf_output,public_ip))," \
+		$(ANSIBLE_REMOTE_ARGS) \
+		$(ANSIBLE_DIR)/proxmox/deploy_foreman_answer.yml
+
+hammer: ## Create Foreman test objects using Terraform's dedicated provisioning subnet.
 	$(require_ssh_private_key)
 	@set -e; subnet_name="$$($(call tf_output,provisioning_subnet_name))"; \
 	$(ANSIBLE_PLAYBOOK) \
@@ -95,17 +110,13 @@ proxmox-prerequisites: ## Create Foreman test objects using Terraform's dedicate
 		-e "proxmox_test_dhcp_proxy=$$($(call tf_output,satellite_fqdn))" \
 		-e "proxmox_test_acceptance_ip=$$($(call tf_output,provisioning_acceptance_test_ip))"
 
-proxmox-deploy: ## Deploy the supported Proxmox configuration through Satellite Installer and Hammer.
+deploy-answer-files: ## Deploy the POC answer and iPXE templates through Hammer.
 	$(require_ssh_private_key)
-	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	@$(ANSIBLE_PLAYBOOK) \
 		-i "$$($(call tf_output,public_ip))," \
 		$(ANSIBLE_REMOTE_ARGS) \
 		-e "proxmox_foreman_fqdn=$$($(call tf_output,satellite_fqdn))" \
 		$(ANSIBLE_DIR)/proxmox/deploy.yml
-
-proxmox-ansible-deploy: ## Alias for the supported Ansible Proxmox deployment.
-	$(MAKE) proxmox-deploy SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 
 test-setup: ## Install the Ruby dependencies used by the Serverspec suites.
 	bundle install

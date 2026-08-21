@@ -36,7 +36,7 @@
           - proxmox_test_subnet_network == '192.0.2.0' or proxmox_allow_routable_test_subnet | bool
         fail_msg: >-
           This playbook creates Foreman records. Run it only through
-          `make proxmox-prerequisites`; non-TEST-NET CIDRs require explicit approval.
+          `make hammer`; non-TEST-NET CIDRs require explicit approval.
 
     - name: Verify Hammer is available with local Satellite credentials
       ansible.builtin.command: hammer --output json organization list
@@ -113,7 +113,7 @@
         that: proxmox_dhcp_proxy_matches | length == 1
         fail_msg: >-
           Expected exactly one Smart Proxy named {{ proxmox_test_dhcp_proxy }}.
-          Run make install first so Satellite Installer configures its local proxy.
+          Run make satellite-installer first so Satellite Installer configures its local proxy.
 
     - name: Query existing Proxmox test domain
       ansible.builtin.command:

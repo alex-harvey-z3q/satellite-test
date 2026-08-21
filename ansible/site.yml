@@ -163,22 +163,6 @@
         name: satellite
         state: present
 
-    - name: Install the POC Puppet module used by Satellite Installer
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/files/foreman-installer/modules/proxmox_answer/"
-        dest: /usr/share/foreman-installer/modules/proxmox_answer/
-        owner: root
-        group: root
-        mode: preserve
-
-    - name: Configure the POC custom Hiera classes for Satellite Installer
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/files/foreman-installer/custom-hiera.yaml"
-        dest: /etc/foreman-installer/custom-hiera.yaml
-        owner: root
-        group: root
-        mode: '0644'
-
     - name: Locate the dedicated provisioning interface
       ansible.builtin.shell: >-
         ip -o -4 addr show |
@@ -193,7 +177,7 @@
         that: satellite_provisioning_interface.stdout | length > 0
         fail_msg: >-
           Terraform's provisioning ENI ({{ satellite_provisioning_interface_ip }}) is not visible.
-          Apply Terraform and wait for the ENI attachment before running make install.
+          Apply Terraform and wait for the ENI attachment before running make satellite-installer.
 
     - name: Run the Satellite installer once
       ansible.builtin.shell: >-
