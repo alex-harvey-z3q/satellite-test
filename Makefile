@@ -43,7 +43,7 @@ update-my-ip: ## Detect the current public IPv4, update SSH/HTTPS CIDRs, then ap
 	@test -f $(TF_DIR)/terraform.tfvars || (echo "Create $(TF_DIR)/terraform.tfvars before updating access CIDRs" >&2; exit 1)
 	@public_ip="$$(curl --fail --silent --show-error https://checkip.amazonaws.com | tr -d '\n')"; \
 	[[ "$$public_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$$ ]] || (echo "Could not determine a public IPv4 address" >&2; exit 1); \
-	PUBLIC_IP="$$public_ip" ruby -e 'path = ARGV.fetch(0); content = File.read(path); ip = ENV.fetch("PUBLIC_IP"); %w[admin_cidrs ssh_cidrs].each { |key| pattern = /^(\s*#{Regexp.escape(key)}\s*=\s*)\[[^\]]*\]/; raise "Missing #{key} in terraform.tfvars" unless content.match?(pattern); content.sub!(pattern) { "#{$$1}[\"#{ip}/32\"]" } }; File.write(path, content)' $(TF_DIR)/terraform.tfvars; \
+	ruby scripts/update-access-cidrs.rb $(TF_DIR)/terraform.tfvars "$$public_ip"; \
 	echo "Updated SSH and HTTPS access CIDRs to $$public_ip/32"
 	$(MAKE) apply
 
