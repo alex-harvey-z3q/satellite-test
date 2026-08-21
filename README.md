@@ -1,4 +1,4 @@
-# Red Hat Satellite on EC2 — proof of concept
+# Red Hat Satellite support for Proxmox Automation
 
 This proof of concept uses Terraform to create a RHEL 9 EC2 instance and an encrypted EBS volume for Satellite content, then uses Ansible to install Red Hat Satellite. Run the workflow through the included Makefile only.
 
@@ -121,6 +121,45 @@ For a short-lived POC, omitting `satellite_fqdn` and `hosted_zone_id` uses the E
   |                     |                                      |   v                                           |
   |                     |                                      | Foreman /unattended/provision?mac=...         |
   +---------------------+                                      +-----------------------------------------------+
+```
+
+### Code path
+
+```text
+                                developer workstation
+
+  Makefile
+     |
+     +-- make install -----------------------------------------------------+
+     |                                                                     |
+     |   scripts/install.sh --> ansible/site.yml                           |
+     |                           |                                         |
+     |                           +-- files/foreman-installer/              |
+     |                           |     custom-hiera.yaml                   |
+     |                           |     modules/proxmox_answer/             |
+     |                           |       manifests/init.pp                 |
+     |                           |                                         |
+     |                           +-- satellite-installer ------------------+-->
+     |                                      installer-managed DHCP/TFTP/Smart Proxy
+     |                                      and 04-proxmox-answer.conf
+     |
+     +-- make proxmox-deploy ----------------------------------------------+
+         |                                                                 |
+         +-- ansible/proxmox_prerequisites.yml --> Hammer -----------------+-->
+         |                                      Foreman domain, subnet, host group,
+         |                                      template records and associations
+         |
+         +-- ansible/proxmox/deploy.yml
+                |
+                +-- deploy_foreman_templates.yml
+                |     +-- proxmox/erb/answer.toml.erb -- Hammer --> Foreman template
+                |     +-- proxmox/erb/ipxe.erb        -- Hammer --> Foreman template
+                |
+                +-- deploy_foreman_answer.yml
+                      +-- proxmox/files/usr/local/libexec/
+                      |     proxmox-foreman-answer.py --> /usr/local/libexec/
+                      +-- proxmox/files/etc/systemd/system/
+                            proxmox-foreman-answer.service --> systemd --> Unix socket
 ```
 
 DHCP, TFTP, Smart Proxy, and the Apache route are configured by `satellite-installer` and its Puppet catalog. The Proxmox deployment playbook uses Hammer to manage only Foreman objects; it does not modify the DHCP or Smart Proxy configuration files directly.
