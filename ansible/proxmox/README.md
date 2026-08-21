@@ -7,9 +7,7 @@ Hammer.
 
 Satellite Installer owns DHCP, TFTP, Smart Proxy settings, and Apache. The POC
 declares a small Puppet class through `custom-hiera.yaml` so the installer also
-manages the `/proxmox-answer` route. The deprecated
-`configure_foreman_ipxe_dhcp.yml` is retained as an implementation reference
-only and is not imported by `deploy.yml`.
+manages the `/proxmox-answer` route.
 
 From the repository root, use the automated entry point:
 

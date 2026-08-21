@@ -52,7 +52,7 @@ aws sts get-caller-identity
    export RHSM_USERNAME RHSM_PASSWORD
    ```
 
-5. Install Satellite. `SSH_PRIVATE_KEY_FILE` must be the absolute path of the private key matching the `key_name` configured in `terraform/terraform.tfvars`. The `install` target creates the non-secret Ansible settings file when needed, installs its required collection, registers the host with Red Hat Subscription Management, mounts the Pulp disk, installs the DHCP and iPXE prerequisites before Satellite protects package changes, and runs `satellite-installer` with the Foreman Proxy DHCP and TFTP features configured for the dedicated provisioning interface.
+5. Install Satellite. `SSH_PRIVATE_KEY_FILE` must be the absolute path of the private key matching the `key_name` configured in `terraform/terraform.tfvars`. The `install` target creates the non-secret Ansible settings file when needed, installs its required collection, registers the host with Red Hat Subscription Management, mounts the Pulp disk, and runs `satellite-installer` with the Foreman Proxy DHCP and TFTP features configured for the dedicated provisioning interface.
 
    ```sh
    make install SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
@@ -135,7 +135,7 @@ Terraform creates the dedicated provisioning subnet and allows DHCP, TFTP, and H
 
 The answer adapter retains the required `http://<Satellite-FQDN>/proxmox-answer` endpoint. Its Unix-socket service is routed by an Apache fragment created by a POC Puppet class declared in `custom-hiera.yaml` and applied by `satellite-installer`. No project automation edits `dhcpd.conf`, Smart Proxy YAML, `/var/lib/tftpboot`, or Satellite’s generated `05-foreman.conf`.
 
-The supported deployment renders the Satellite FQDN into the iPXE template in memory; it does not modify the tracked template source. The legacy imported Bash deployment is retained for comparison only as `make proxmox-legacy-deploy`; it changes installer-managed files and is not a supported POC deployment path.
+The supported deployment renders the Satellite FQDN into the iPXE template in memory; it does not modify the tracked template source.
 
 For this disposable POC, Satellite's initial local API credential is `admin` / `Welcome1`. It is deliberately predictable so the automation can run unattended; never use it outside this POC. Set the API credentials only for the acceptance test:
 
