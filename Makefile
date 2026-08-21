@@ -21,7 +21,7 @@ endef
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init fmt validate preflight configure plan apply update-my-ip satellite-installer output ssh destroy satellite-customise custom hammer deploy-answer-files test-setup acceptance-fixture test-contract test-acceptance
+.PHONY: help init fmt validate preflight configure plan apply update-my-ip install output ssh destroy hammer satellite-installer answer-service templates test-setup acceptance-fixture test-contract test-acceptance
 
 help: ## Show available targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -63,7 +63,7 @@ update-my-ip: ## Detect the current public IPv4, update SSH/HTTPS CIDRs, then ap
 	echo "Updated SSH and HTTPS access CIDRs to $$public_ip/32"
 	$(MAKE) apply
 
-satellite-installer: configure ## Install base Satellite. Requires SSH_PRIVATE_KEY_FILE, RHSM_USERNAME, and RHSM_PASSWORD.
+install: configure ## Install base Satellite. Requires SSH_PRIVATE_KEY_FILE, RHSM_USERNAME, and RHSM_PASSWORD.
 	$(require_ssh_private_key)
 	@test -n "$(RHSM_USERNAME)" || (echo "Set RHSM_USERNAME to your Red Hat login" >&2; exit 1)
 	@test -n "$(RHSM_PASSWORD)" || (echo "Set RHSM_PASSWORD to your Red Hat password" >&2; exit 1)
@@ -79,14 +79,14 @@ ssh: ## Open an SSH session. Requires SSH_PRIVATE_KEY_FILE.
 destroy: ## Tear down the POC. Terraform asks for confirmation.
 	$(TERRAFORM) destroy
 
-satellite-customise: ## Apply the POC-specific Apache route through Satellite Installer.
+satellite-installer: ## Apply the POC-specific Apache route through Satellite Installer.
 	$(require_ssh_private_key)
 	@$(ANSIBLE_PLAYBOOK) \
 		-i "$$($(call tf_output,public_ip))," \
 		$(ANSIBLE_REMOTE_ARGS) \
 		$(ANSIBLE_DIR)/proxmox/customise.yml
 
-custom: ## Install the POC-specific answer-adapter service.
+answer-service: ## Install the POC-specific answer-adapter service.
 	$(require_ssh_private_key)
 	@$(ANSIBLE_PLAYBOOK) \
 		-i "$$($(call tf_output,public_ip))," \
@@ -110,7 +110,7 @@ hammer: ## Create Foreman test objects using Terraform's dedicated provisioning 
 		-e "proxmox_test_dhcp_proxy=$$($(call tf_output,satellite_fqdn))" \
 		-e "proxmox_test_acceptance_ip=$$($(call tf_output,provisioning_acceptance_test_ip))"
 
-deploy-answer-files: ## Deploy the POC answer and iPXE templates through Hammer.
+templates: ## Deploy the POC answer and iPXE templates through Hammer.
 	$(require_ssh_private_key)
 	@$(ANSIBLE_PLAYBOOK) \
 		-i "$$($(call tf_output,public_ip))," \

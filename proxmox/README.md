@@ -3,10 +3,10 @@
 This directory contains the Foreman template sources and standalone answer
 adapter used by this POC.
 
-The base Satellite installation is `make satellite-installer`.
-`make satellite-customise` adds the POC-specific Apache route;
-`make custom` adds the answer adapter; `make hammer` creates the Foreman
-records; and `make deploy-answer-files` deploys the two custom template bodies
+The base Satellite installation is `make install`.
+`make satellite-installer` adds the POC-specific Apache route;
+`make answer-service` adds the answer adapter; `make hammer` creates the
+Foreman records; and `make templates` deploys the two custom template bodies
 through Hammer. Terraform owns the AWS provisioning subnet and network access;
 Satellite Installer owns DHCP, TFTP, the Smart Proxy, and Apache.
 

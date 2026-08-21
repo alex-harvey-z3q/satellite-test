@@ -113,7 +113,7 @@
         that: proxmox_dhcp_proxy_matches | length == 1
         fail_msg: >-
           Expected exactly one Smart Proxy named {{ proxmox_test_dhcp_proxy }}.
-          Run make satellite-installer first so Satellite Installer configures its local proxy.
+          Run make install first so Satellite Installer configures its local proxy.
 
     - name: Query existing Proxmox test domain
       ansible.builtin.command:

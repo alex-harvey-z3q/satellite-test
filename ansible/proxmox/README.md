@@ -13,8 +13,8 @@ manages the `/proxmox-answer` route.
 From the repository root, run the technology-layer targets in order:
 
 ```sh
-make satellite-customise SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-make custom SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make satellite-installer SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make answer-service SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
 make hammer SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-make deploy-answer-files SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make templates SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
 ```

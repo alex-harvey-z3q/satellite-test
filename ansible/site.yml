@@ -177,7 +177,7 @@
         that: satellite_provisioning_interface.stdout | length > 0
         fail_msg: >-
           Terraform's provisioning ENI ({{ satellite_provisioning_interface_ip }}) is not visible.
-          Apply Terraform and wait for the ENI attachment before running make satellite-installer.
+          Apply Terraform and wait for the ENI attachment before running make install.
 
     - name: Run the Satellite installer once
       ansible.builtin.shell: >-
