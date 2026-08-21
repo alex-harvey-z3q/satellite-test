@@ -8,7 +8,6 @@
     proxmox_answer_service_name: proxmox-foreman-answer
     proxmox_answer_socket: /run/proxmox-foreman-answer/answer.sock
     proxmox_answer_endpoint: /proxmox-answer
-    proxmox_foreman_vhost_config: /etc/httpd/conf.d/05-foreman.conf
 
   pre_tasks:
     - name: Verify the local answer-adapter sources
@@ -27,15 +26,6 @@
         fail_msg: "Missing answer-adapter source {{ item.item }}."
       loop: "{{ proxmox_answer_sources.results }}"
 
-    - name: Require the Foreman Apache virtual-host configuration
-      ansible.builtin.stat:
-        path: "{{ proxmox_foreman_vhost_config }}"
-      register: proxmox_foreman_vhost
-
-    - name: Verify the Foreman Apache virtual-host configuration exists
-      ansible.builtin.assert:
-        that: proxmox_foreman_vhost.stat.isreg | default(false)
-
   tasks:
     - name: Install the answer-adapter handler
       ansible.builtin.copy:
@@ -44,7 +34,7 @@
         owner: root
         group: root
         mode: '0755'
-      notify: Restart Apache
+      notify: Restart answer adapter
 
     - name: Install the answer-adapter systemd unit
       ansible.builtin.copy:
@@ -53,19 +43,7 @@
         owner: root
         group: root
         mode: '0644'
-      notify: Restart Apache
-
-    - name: Route the answer endpoint before Foreman's catch-all proxy
-      ansible.builtin.lineinfile:
-        path: "{{ proxmox_foreman_vhost_config }}"
-        line: "  ProxyPass {{ proxmox_answer_endpoint }} unix:{{ proxmox_answer_socket }}|http://localhost/"
-        insertbefore: '^\\s*ProxyPass / unix:'
-        state: present
-      notify: Restart Apache
-
-    - name: Validate Apache configuration
-      ansible.builtin.command: httpd -t
-      changed_when: false
+      notify: Restart answer adapter
 
     - name: Enable and start the answer-adapter service
       ansible.builtin.systemd_service:
@@ -74,7 +52,7 @@
         state: started
         daemon_reload: true
 
-    - name: Apply any pending Apache configuration change
+    - name: Apply any pending answer-adapter configuration change
       ansible.builtin.meta: flush_handlers
 
     - name: Verify the answer adapter rejects an identity-free request
@@ -87,7 +65,7 @@
         status_code: 400
 
   handlers:
-    - name: Restart Apache
+    - name: Restart answer adapter
       ansible.builtin.service:
-        name: httpd
+        name: "{{ proxmox_answer_service_name }}"
         state: restarted

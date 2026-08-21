@@ -1,28 +1,23 @@
 ---
-- name: Deploy Proxmox Foreman templates
+- name: Deploy Proxmox Foreman templates through local Hammer
   hosts: all
   become: true
   gather_facts: false
   vars:
     proxmox_template_targets:
       - name: Proxmox Autoinstall Answer File
-        kind: provision
         source: "{{ playbook_dir }}/../../proxmox/erb/answer.toml.erb"
+        staged: /var/tmp/proxmox-answer.toml.erb
       - name: Proxmox VE PXEiPXE
-        kind: iPXE
         source: "{{ playbook_dir }}/../../proxmox/erb/ipxe.erb"
+        staged: /var/tmp/proxmox-ipxe.erb
 
   pre_tasks:
-    - name: Require Foreman API inputs
+    - name: Require the Satellite FQDN used by the iPXE template
       ansible.builtin.assert:
         that:
           - proxmox_foreman_fqdn is defined
           - proxmox_foreman_fqdn | length > 0
-          - proxmox_foreman_api_user is defined
-          - proxmox_foreman_api_user | length > 0
-          - proxmox_foreman_api_password is defined
-          - proxmox_foreman_api_password | length > 0
-      no_log: true
 
     - name: Verify the template source files
       ansible.builtin.stat:
@@ -39,67 +34,46 @@
       loop: "{{ proxmox_template_sources.results }}"
 
   tasks:
-    - name: Query Foreman provisioning templates
-      ansible.builtin.uri:
-        url: "https://{{ proxmox_foreman_fqdn }}/api/provisioning_templates?per_page=9999"
-        method: GET
-        user: "{{ proxmox_foreman_api_user }}"
-        password: "{{ proxmox_foreman_api_password }}"
-        force_basic_auth: true
-        validate_certs: false
-        return_content: true
-      register: proxmox_foreman_templates
-      no_log: true
-
-    - name: Select exact Foreman template matches
-      ansible.builtin.set_fact:
-        proxmox_answer_template_matches: >-
-          {{ proxmox_foreman_templates.json.results
-             | selectattr('name', 'equalto', 'Proxmox Autoinstall Answer File')
-             | selectattr('template_kind_name', 'equalto', 'provision') | list }}
-        proxmox_ipxe_template_matches: >-
-          {{ proxmox_foreman_templates.json.results
-             | selectattr('name', 'equalto', 'Proxmox VE PXEiPXE')
-             | selectattr('template_kind_name', 'equalto', 'iPXE') | list }}
-
-    - name: Require exactly one template of each expected name and kind
-      ansible.builtin.assert:
-        that:
-          - proxmox_answer_template_matches | length == 1
-          - proxmox_ipxe_template_matches | length == 1
-        fail_msg: >-
-          Expected exactly one Provision answer template and one iPXE template.
-
-    - name: Read the deployed Foreman templates
-      ansible.builtin.uri:
-        url: "https://{{ proxmox_foreman_fqdn }}/api/provisioning_templates/{{ item.id }}"
-        method: GET
-        user: "{{ proxmox_foreman_api_user }}"
-        password: "{{ proxmox_foreman_api_password }}"
-        force_basic_auth: true
-        validate_certs: false
-        return_content: true
-      loop:
-        - id: "{{ (proxmox_answer_template_matches | first).id }}"
-          source: "{{ playbook_dir }}/../../proxmox/erb/answer.toml.erb"
-        - id: "{{ (proxmox_ipxe_template_matches | first).id }}"
-          source: "{{ playbook_dir }}/../../proxmox/erb/ipxe.erb"
+    - name: Read the deployed Foreman template bodies
+      ansible.builtin.command:
+        argv: [hammer, template, dump, --name, "{{ item.name }}"]
+      loop: "{{ proxmox_template_targets }}"
       register: proxmox_deployed_templates
-      no_log: true
+      changed_when: false
 
-    - name: Update template bodies only when they differ
-      ansible.builtin.uri:
-        url: "https://{{ proxmox_foreman_fqdn }}/api/provisioning_templates/{{ item.item.id }}"
-        method: PUT
-        user: "{{ proxmox_foreman_api_user }}"
-        password: "{{ proxmox_foreman_api_password }}"
-        force_basic_auth: true
-        validate_certs: false
-        body_format: json
-        body:
-          provisioning_template:
-            template: "{{ lookup('ansible.builtin.file', item.item.source) }}"
-        status_code: 200
+    - name: Require the Foreman templates created by the prerequisite playbook
+      ansible.builtin.assert:
+        that: item.rc == 0
+        fail_msg: "Template {{ item.item.name }} is missing; run make proxmox-prerequisites first."
       loop: "{{ proxmox_deployed_templates.results }}"
-      when: item.json.template != lookup('ansible.builtin.file', item.item.source)
-      no_log: true
+
+    - name: Stage changed Proxmox Foreman template bodies
+      ansible.builtin.copy:
+        content: >-
+          {{ lookup('ansible.builtin.file', item.item.source)
+             | replace('REPLACE_WITH_FOREMAN_FQDN', proxmox_foreman_fqdn) }}
+        dest: "{{ item.item.staged }}"
+        owner: root
+        group: root
+        mode: '0600'
+      loop: "{{ proxmox_deployed_templates.results }}"
+      when: >-
+        item.stdout !=
+        (lookup('ansible.builtin.file', item.item.source)
+         | replace('REPLACE_WITH_FOREMAN_FQDN', proxmox_foreman_fqdn))
+
+    - name: Update changed Foreman template bodies
+      ansible.builtin.command:
+        argv: [hammer, template, update, --name, "{{ item.item.name }}", --file, "{{ item.item.staged }}"]
+      loop: "{{ proxmox_deployed_templates.results }}"
+      when: >-
+        item.stdout !=
+        (lookup('ansible.builtin.file', item.item.source)
+         | replace('REPLACE_WITH_FOREMAN_FQDN', proxmox_foreman_fqdn))
+      changed_when: true
+
+    - name: Remove staged Proxmox Foreman template bodies
+      ansible.builtin.file:
+        path: "{{ item.staged }}"
+        state: absent
+      loop: "{{ proxmox_template_targets }}"

@@ -1,4 +1,3 @@
 ---
-- import_playbook: configure_foreman_ipxe_dhcp.yml
 - import_playbook: deploy_foreman_templates.yml
 - import_playbook: deploy_foreman_answer.yml

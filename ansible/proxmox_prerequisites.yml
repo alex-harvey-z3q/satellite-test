@@ -12,6 +12,7 @@
     proxmox_test_subnet_mask: "255.255.255.0"
     proxmox_test_subnet_gateway: "192.0.2.1"
     proxmox_test_subnet_dns: "192.0.2.53"
+    proxmox_test_dhcp_proxy: "localhost"
     proxmox_test_acceptance_ip: "192.0.2.250"
     proxmox_test_domain: "proxmox-acceptance.test"
     proxmox_allow_routable_test_subnet: false
@@ -95,6 +96,25 @@
           {{ ((proxmox_architectures.stdout | from_json)
              | selectattr('Name', 'equalto', 'x86_64') | list | first).Id }}
 
+    - name: Query Smart Proxies
+      ansible.builtin.command:
+        argv: [hammer, --output, json, proxy, list, --per-page, '9999']
+      register: proxmox_smart_proxies
+      changed_when: false
+
+    - name: Select the DHCP Smart Proxy managed by Satellite Installer
+      ansible.builtin.set_fact:
+        proxmox_dhcp_proxy_matches: >-
+          {{ (proxmox_smart_proxies.stdout | from_json)
+             | selectattr('Name', 'equalto', proxmox_test_dhcp_proxy) | list }}
+
+    - name: Verify the DHCP Smart Proxy is unique
+      ansible.builtin.assert:
+        that: proxmox_dhcp_proxy_matches | length == 1
+        fail_msg: >-
+          Expected exactly one Smart Proxy named {{ proxmox_test_dhcp_proxy }}.
+          Run make install first so Satellite Installer configures its local proxy.
+
     - name: Query existing Proxmox test domain
       ansible.builtin.command:
         argv: [hammer, --output, json, domain, list, --per-page, '9999']
@@ -171,6 +191,8 @@
           - None
           - --boot-mode
           - Static
+          - --dhcp
+          - "{{ proxmox_test_dhcp_proxy }}"
           - --organization
           - "{{ proxmox_test_organization }}"
           - --location
@@ -189,6 +211,18 @@
         proxmox_test_subnet_id: >-
           {{ ((proxmox_subnets.stdout | from_json)
              | selectattr('Name', 'equalto', proxmox_test_subnet_name) | list | first).Id }}
+
+    - name: Assign the installer-managed DHCP Smart Proxy to the Proxmox test subnet
+      ansible.builtin.command:
+        argv:
+          - hammer
+          - subnet
+          - update
+          - --id
+          - "{{ proxmox_test_subnet_id }}"
+          - --dhcp
+          - "{{ proxmox_test_dhcp_proxy }}"
+      changed_when: false
 
     - name: Query existing provisioning templates
       ansible.builtin.command:

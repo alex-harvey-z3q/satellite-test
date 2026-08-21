@@ -35,7 +35,7 @@ endef
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init fmt validate preflight configure plan apply update-my-ip install output ssh destroy proxmox-configure-fqdn proxmox-answer proxmox-prerequisites proxmox-templates proxmox-test-bootstrap proxmox-dhcp proxmox-deploy proxmox-ansible-deploy test-setup acceptance-fixture test-contract test-acceptance
+.PHONY: help init fmt validate preflight configure plan apply update-my-ip install output ssh destroy proxmox-configure-fqdn proxmox-answer proxmox-prerequisites proxmox-templates proxmox-test-bootstrap proxmox-dhcp proxmox-deploy proxmox-legacy-deploy proxmox-ansible-deploy test-setup acceptance-fixture test-contract test-acceptance
 
 help: ## Show available targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -117,6 +117,7 @@ proxmox-prerequisites: ## Create Foreman test objects using Terraform's dedicate
 		-e "proxmox_test_subnet_mask=$$($(call tf_output,provisioning_subnet_mask))" \
 		-e "proxmox_test_subnet_gateway=$$($(call tf_output,provisioning_subnet_gateway))" \
 		-e "proxmox_test_subnet_dns=$$($(call tf_output,provisioning_subnet_dns))" \
+		-e "proxmox_test_dhcp_proxy=$$($(call tf_output,satellite_fqdn))" \
 		-e "proxmox_test_acceptance_ip=$$($(call tf_output,provisioning_acceptance_test_ip))"
 
 proxmox-templates: ## Update Proxmox Foreman templates. Requires SSH_PRIVATE_KEY_FILE, FOREMAN_USER, and FOREMAN_PASSWORD.
@@ -135,12 +136,8 @@ proxmox-templates: ## Update Proxmox Foreman templates. Requires SSH_PRIVATE_KEY
 	$(PROXMOX_SSH) -tt ec2-user@"$$host" "set -e; set -a; . '$$remote_dir/foreman.env'; set +a; rm -f '$$remote_dir/foreman.env'; bash '$$remote_dir/scripts/deploy-proxmox-foreman-templates.sh' --apply"; \
 	$(PROXMOX_SSH) ec2-user@"$$host" "rm -rf '$$remote_dir'"
 
-proxmox-test-bootstrap: ## Create test records, update templates, and deploy the adapter without DHCP changes.
-	$(MAKE) proxmox-configure-fqdn
-	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
-	$(MAKE) proxmox-templates SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
-	$(MAKE) proxmox-answer SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
-	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
+proxmox-test-bootstrap: ## Deploy the supported Proxmox test configuration.
+	$(MAKE) proxmox-deploy SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 
 proxmox-dhcp: ## Configure DHCP/TFTP/iPXE and assign its proxy to the provisioning subnet. Requires SSH_PRIVATE_KEY_FILE, FOREMAN_USER, FOREMAN_PASSWORD, and PVE_DHCP_OMAPI_SECRET.
 	$(require_proxmox_dhcp_inputs)
@@ -159,7 +156,7 @@ proxmox-dhcp: ## Configure DHCP/TFTP/iPXE and assign its proxy to the provisioni
 	scp proxmox/scripts/configure-foreman-ipxe-dhcp.sh "$$env_file" ec2-user@"$$host":"$$remote_dir/"; \
 	ssh -tt ec2-user@"$$host" "set -e; set -a; . '$$remote_dir/foreman.env'; set +a; rm -f '$$remote_dir/foreman.env'; bash '$$remote_dir/configure-foreman-ipxe-dhcp.sh' --configure-foreman --subnet '$$subnet_name'; rm -rf '$$remote_dir'"
 
-proxmox-deploy: ## Run Proxmox prerequisites and all three supplied Bash deployers in dependency order.
+proxmox-legacy-deploy: ## Legacy unmanaged-file Bash deployment; retained only for comparison and not supported by Satellite Installer.
 	$(MAKE) proxmox-configure-fqdn
 	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-dhcp SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
@@ -167,19 +164,17 @@ proxmox-deploy: ## Run Proxmox prerequisites and all three supplied Bash deploye
 	$(MAKE) proxmox-answer SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 
-proxmox-ansible-deploy: ## Run the three Ansible Proxmox deployers in dependency order. Requires SSH_PRIVATE_KEY_FILE, FOREMAN_USER, FOREMAN_PASSWORD, and PVE_DHCP_OMAPI_SECRET.
-	$(require_proxmox_dhcp_inputs)
-	$(MAKE) proxmox-configure-fqdn
+proxmox-deploy: ## Deploy the supported Proxmox configuration through Satellite Installer and Hammer.
+	$(require_ssh_private_key)
+	$(MAKE) proxmox-prerequisites SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 	@$(ANSIBLE_PLAYBOOK) \
 		-i "$$($(call tf_output,public_ip))," \
 		$(ANSIBLE_REMOTE_ARGS) \
 		-e "proxmox_foreman_fqdn=$$($(call tf_output,satellite_fqdn))" \
-		-e "proxmox_provisioning_subnet_cidr=$$($(call tf_output,provisioning_subnet_cidr))" \
-		-e "proxmox_dhcp_omapi_secret=$${PVE_DHCP_OMAPI_SECRET}" \
-		-e "proxmox_foreman_api_user=$${FOREMAN_USER}" \
-		-e "proxmox_foreman_api_password=$${FOREMAN_PASSWORD}" \
-		-e "{\"proxmox_configure_foreman_dhcp\": true, \"proxmox_foreman_subnet_names\": [\"$$($(call tf_output,provisioning_subnet_name))\"]}" \
 		$(ANSIBLE_DIR)/proxmox/deploy.yml
+
+proxmox-ansible-deploy: ## Alias for the supported Ansible Proxmox deployment.
+	$(MAKE) proxmox-deploy SSH_PRIVATE_KEY_FILE="$(SSH_PRIVATE_KEY_FILE)"
 
 test-setup: ## Install the Ruby dependencies used by the Serverspec suites.
 	bundle install
