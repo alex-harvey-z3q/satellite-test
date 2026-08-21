@@ -1,0 +1,9 @@
+---
+# This POC owns this custom Hiera file.  satellite-installer merges the listed
+# class into its catalog, so the Apache route remains Puppet-managed across
+# installer runs.
+lookup_options:
+  classes:
+    merge: unique
+classes:
+  - proxmox_answer
