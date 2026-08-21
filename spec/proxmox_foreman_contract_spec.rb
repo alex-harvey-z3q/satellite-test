@@ -1,6 +1,6 @@
 require "spec_helper"
 
-ADAPTER_URL = "http://127.0.0.1/proxmox-answer".freeze
+ADAPTER_URL = ENV.fetch("PROXMOX_ANSWER_URL", "http://127.0.0.1/proxmox-answer").freeze
 UNKNOWN_MAC = ENV.fetch("PROXMOX_CONTRACT_UNKNOWN_MAC", "02:00:00:00:00:01").freeze
 
 def adapter_status(arguments)

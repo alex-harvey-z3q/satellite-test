@@ -98,28 +98,24 @@ For a short-lived POC, omitting `satellite_fqdn` and `hosted_zone_id` uses the E
 
 ## Testing the Proxmox answer adapter
 
-After `make install`, the following is the complete Proxmox deployment workflow. Terraform creates a dedicated private provisioning subnet in the Satellite VPC. Its AWS address range is real and Foreman is configured to use it, which makes the server-side Foreman, DHCP, TFTP, iPXE, template, and answer-adapter configuration meaningful. AWS still owns DHCP for EC2 instances, so it cannot PXE-boot an EC2 test client from this server.
+After `make install`, deploy the Proxmox proof of concept with:
 
-For this disposable POC, Satellite is installed with the documented local API credential `admin` / `Welcome1`. It is deliberately predictable so the deployment automation can run unattended; never use it outside this POC. Set the DHCP shared secret in the current shell only:
+```sh
+make proxmox-deploy SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+```
+
+Terraform creates the dedicated provisioning subnet and allows DHCP, TFTP, and HTTP boot only from that subnet. Satellite Installer owns the local DHCP and TFTP services; the prerequisite playbook manages the Foreman domain, subnet-to-Smart-Proxy association, operating system, host group, and template associations through Hammer. The Proxmox template bodies are stored in Satellite itself.
+
+The answer adapter retains the required `http://<Satellite-FQDN>/proxmox-answer` endpoint. Its Unix-socket service is routed by an Apache fragment created by a POC Puppet class declared in `custom-hiera.yaml` and applied by `satellite-installer`. No project automation edits `dhcpd.conf`, Smart Proxy YAML, `/var/lib/tftpboot`, or Satellite’s generated `05-foreman.conf`.
+
+The supported deployment renders the Satellite FQDN into the iPXE template in memory; it does not modify the tracked template source. The legacy imported Bash deployment is retained for comparison only as `make proxmox-legacy-deploy`; it changes installer-managed files and is not a supported POC deployment path.
+
+For this disposable POC, Satellite's initial local API credential is `admin` / `Welcome1`. It is deliberately predictable so the automation can run unattended; never use it outside this POC. Set the API credentials only for the acceptance test:
 
 ```sh
 export FOREMAN_USER='admin'
 export FOREMAN_PASSWORD='Welcome1'
-# Generate this once; retain it in a password manager for future DHCP changes.
-export PVE_DHCP_OMAPI_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
 ```
-
-`PVE_DHCP_OMAPI_SECRET` is a locally generated shared secret for ISC DHCP and Foreman's Smart Proxy; it is not supplied by Red Hat or AWS. Do not commit it or place it in `terraform.tfvars`.
-
-Configure the iPXE assets from Terraform's Satellite FQDN, then run:
-
-```sh
-make proxmox-configure-fqdn
-make proxmox-deploy SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-unset FOREMAN_PASSWORD PVE_DHCP_OMAPI_SECRET
-```
-
-`proxmox-configure-fqdn` is idempotent and only replaces the two `REPLACE_WITH_FOREMAN_FQDN` placeholders. `proxmox-deploy` and `proxmox-test-bootstrap` run it automatically. `proxmox-deploy` then runs the supporting Foreman prerequisites and all three supplied Bash deployers in this order: DHCP/TFTP/iPXE (including assigning the local Smart Proxy as the DHCP proxy for the Terraform subnet), Foreman templates, and the answer adapter. It finishes by re-running the idempotent prerequisites to associate the deployed provision template with the test host group. The DHCP script automatically receives Terraform's `provisioning_subnet_cidr`; do not set it yourself. `make install` persists SELinux disabled for this POC because the adapter’s Apache Unix-socket proxy requires it.
 
 Then run the safe HTTP contract suite. It makes only invalid or deliberately unregistered requests and does not change Foreman data:
 
@@ -127,32 +123,14 @@ Then run the safe HTTP contract suite. It makes only invalid or deliberately unr
 make test-contract SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
 ```
 
-It verifies the deployed DHCP, Smart Proxy, iPXE, Apache, answer-adapter, systemd, Foreman subnet-proxy, host-group template-combination, and exact template-body state. It also verifies the adapter rejects incorrect methods, content types, JSON, MAC addresses, and oversized requests with the documented HTTP status codes, and that an unregistered valid MAC receives HTTP 404.
+It verifies the installer-managed services, standalone answer adapter, Foreman subnet/proxy association, host-group boot configuration, template associations, and exact template bodies. It also verifies the adapter rejects incorrect methods, content types, JSON, MAC addresses, and oversized requests with the documented HTTP status codes, and that an unregistered valid MAC receives HTTP 404.
 
-The end-to-end acceptance suite creates one disposable Foreman host, requests its answer file through Apache and the adapter, validates the returned TOML, then deletes that host. The host is named `codex-proxmox-acceptance-*`; the test refuses to delete a differently named host. It is opt-in because it needs a real host group and valid Foreman API credentials.
+The end-to-end acceptance suite creates one disposable Foreman host, requests its answer file from the standalone adapter, validates the returned TOML, then deletes that host. The host is named `codex-proxmox-acceptance-*`; the test refuses to delete a differently named host. Its API endpoint defaults to `https://` plus the Terraform public IP. Run it with:
 
-1. `make proxmox-test-bootstrap` is the no-DHCP alternative. It creates the same Foreman prerequisites using Terraform's dedicated provisioning subnet, deploys the adapter, and updates the templates, but does not run the DHCP/TFTP/iPXE script.
-
-   ```sh
-   make proxmox-test-bootstrap SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-   ```
-
-   It enables end-to-end testing of the answer-file path and Bash template deployment without changing the Satellite host's DHCP service.
-
-2. The acceptance suite uses the same `FOREMAN_USER` and `FOREMAN_PASSWORD` set above. Its API endpoint defaults to `https://` plus the Terraform public IP. TLS verification is deliberately disabled by default for this self-signed POC certificate; set `FOREMAN_API_VERIFY_TLS=true` when using a trusted certificate.
-
-   ```sh
-   export FOREMAN_ACCEPTANCE_EXPECTED_TOML_PATTERN='mailto\\s*=\\s*"operations@example\\.com"'
-   ```
-
-   To use a payload outside the default local path, export `FOREMAN_ACCEPTANCE_HOST_PAYLOAD_FILE` with its absolute path.
-
-3. Run the acceptance suite and clear credentials afterwards:
-
-   ```sh
-   make test-acceptance SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-   unset FOREMAN_USER FOREMAN_PASSWORD
-   ```
+```sh
+make test-acceptance SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+unset FOREMAN_USER FOREMAN_PASSWORD
+```
 
 `spec/fixtures/foreman-acceptance-host.json` is Git-ignored. Do not commit it or put API credentials in it. If a test run is interrupted after creating a host, manually delete the generated `codex-proxmox-acceptance-*` host in Satellite.
 
