@@ -75,34 +75,33 @@ For a short-lived POC, omitting `satellite_fqdn` and `hosted_zone_id` uses the E
 ```text
                          Dedicated provisioning subnet
 
-  +---------------------+                                  +-----------------------------------------------+
-  | Proxmox host        |                                  | Satellite EC2 host                            |
-  | provisioning NIC    |                                  |                                               |
-  |                     | -- DHCPDISCOVER ---------------> | ISC DHCP (installer-managed)                  |
-  |                     | <--- lease, boot instructions -- |   ^                                           |
-  |                     |                                  |   | OMAPI: reservations and boot configuration|
-  |                     | -- TFTP -----------------------> |   |                                           |
-  |                     | <--- network boot artefacts ---- | Smart Proxy (installer-managed)               |
-  |                     |                                  |   ^                                           |
-  |                     | -- HTTP iPXE boot -------------> |   | Foreman API                               |
-  |                     | <--- rendered iPXE template ---- |   |                                           |
-  |                     |                                  |   +---------------------------------------+   |
-  |                     |                                  |   | Foreman                               |   |
-  |                     |                                  |   | hosts, subnet, host group, templates  |   |
-  |                     |                                  |   | /unattended/provision?mac=...         |   |
-  |                     |                                  |   +-------------------+-------------------+   |
-  |                     |                                  |                       ^ GET /unattended       |
-  |                     |                                  |                       |                       |
-  |                     |                                  |                       |                       |
-  | Proxmox installer   | -- POST /proxmox-answer -------> | Apache                |                       |
-  |   sends NIC MACs    | <--- rendered TOML answer file - |   | ProxyPass (Puppet/Hiera-managed)          |
-  |                     |                                  |   v                   |                       |
-  |                     |                                  |   +---------------------------------------+   |
-  |                     |                                  |   | Answer adapter service                |   |
-  |                     |                                  |   | proxmox-foreman-answer.service        |   |
-  |                     |                                  |   | GET over /run/foreman.sock            |   |
-  |                     |                                  |   +-------------------+-------------------+   |
-  +---------------------+                                  +-----------------------------------------------+
++-------------------+                                  +-----------------------------------------------+
+| Proxmox host      |                                  | Satellite EC2 host                            |
+| provisioning NIC  |                                  |                                               |
+|                   | -- DHCPDISCOVER ---------------> | ISC DHCP (installer-managed)                  |
+|                   | <--- lease, boot instructions -- |   ^                                           |
+|                   |                                  |   | OMAPI: reservations and boot config       |
+|                   | -- TFTP -----------------------> |   |                                           |
+|                   | <--- network boot artefacts ---- | Smart Proxy (installer-managed)               |
+|                   |                                  |   ^                                           |
+|                   | -- HTTP iPXE boot -------------> |   | Foreman API                               |
+|                   | <--- rendered iPXE template ---- |   |                                           |
+|                   |                                  |   +---------------------------------------+   |
+|                   |                                  |   | Foreman                               |   |
+|                   |                                  |   | hosts, subnet, host group, templates  |   |
+|                   |                                  |   +-------------------+-------------------+   |
+|                   |                                  |                       ^                       |
+|                   |                                  |                       |                       |
+|                   |                                  |            GET /unattended/provision?mac=...  |
+| Proxmox installer | -- POST /proxmox-answer -------> | Apache                |                       |
+|   sends NIC MACs  | <--- rendered TOML answer file - |   | ProxyPass (Puppet-managed)                |
+|                   |                                  |   v                   |                       |
+|                   |                                  |   +---------------------------------------+   |
+|                   |                                  |   | Answer adapter service                |   |
+|                   |                                  |   | proxmox-foreman-answer.service        |   |
+|                   |                                  |   | GET over /run/foreman.sock            |   |
+|                   |                                  |   +-------------------+-------------------+   |
++-------------------+                                  +-----------------------------------------------+
 ```
 
 ### Code path
