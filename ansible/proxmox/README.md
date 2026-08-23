@@ -3,8 +3,8 @@
 `customise.yml` applies the POC-specific Apache route through Satellite
 Installer custom Hiera. `deploy_foreman_answer.yml` installs the standalone
 answer adapter. `deploy.yml` updates the two custom Foreman template bodies
-through local Hammer. The parent `proxmox_prerequisites.yml` manages the
-required Foreman records through Hammer.
+through local Hammer. `hammer.yml` manages the required Foreman records
+through Hammer.
 
 Satellite Installer owns DHCP, TFTP, Smart Proxy settings, and Apache. The POC
 declares a small Puppet class through `custom-hiera.yaml` so the installer also

@@ -107,39 +107,33 @@ For a short-lived POC, omitting `satellite_fqdn` and `hosted_zone_id` uses the E
 ### Code path
 
 ```text
-                                developer workstation
-
-  Makefile
-     |
-     +-- make install -------------------------------------------------------->
-     |   scripts/install.sh --> ansible/site.yml --> satellite-installer
-     |                                           --> base Satellite
-     |                                               DHCP/TFTP/Smart Proxy
-     |
-     +-- make hammer --------------------------------------------------------+
-         +-- ansible/proxmox_prerequisites.yml --> Hammer --> Foreman domain,
-         |                                                subnet, host group,
-         |                                              template associations
-         |
-     +-- make satellite-installer -------------------------------------------+
-     |   ansible/proxmox/customise.yml
-     |      +-- files/foreman-installer/custom-hiera.yaml
-     |      +-- files/foreman-installer/modules/proxmox_answer/
-     |      |     manifests/init.pp
-     |      +-- satellite-installer --> POC Apache /proxmox-answer route
-     |
-     +-- make answer-service ------------------------------------------------+
-         |
-         +-- deploy_foreman_answer.yml
-               +-- proxmox/files/.../proxmox-foreman-answer.py
-               +-- proxmox/files/.../proxmox-foreman-answer.service
-                     --> systemd --> Unix socket
-     |
-     +-- make templates -----------------------------------------------------+
-         +-- ansible/proxmox/deploy.yml
-              +-- deploy_foreman_templates.yml
-                   +-- proxmox/erb/answer.toml.erb -- Hammer --> Foreman template
-                   +-- proxmox/erb/ipxe.erb        -- Hammer --> Foreman template
++----+--------------------------+----------------------------------------------+
+| #  | Make target              | Code path and result                         |
++----+--------------------------+----------------------------------------------+
+| 1  | make install             | scripts/install.sh                           |
+|    |                          |   -> ansible/site.yml                        |
+|    |                          |   -> satellite-installer                     |
+|    |                          |   -> base Satellite, DHCP, TFTP, Smart Proxy |
++----+--------------------------+----------------------------------------------+
+| 2  | make hammer              | ansible/proxmox/hammer.yml                   |
+|    |                          |   -> Hammer                                  |
+|    |                          |   -> Foreman domain, subnet, host group,     |
+|    |                          |      and template associations               |
++----+--------------------------+----------------------------------------------+
+| 3  | make satellite-installer | ansible/proxmox/customise.yml                |
+|    |                          |   -> custom-hiera.yaml + proxmox_answer      |
+|    |                          |      Puppet module                           |
+|    |                          |   -> satellite-installer                     |
+|    |                          |   -> Apache /proxmox-answer route            |
++----+--------------------------+----------------------------------------------+
+| 4  | make answer-service      | ansible/proxmox/deploy_foreman_answer.yml    |
+|    |                          |   -> Python answer adapter + systemd unit    |
+|    |                          |   -> Unix socket                             |
++----+--------------------------+----------------------------------------------+
+| 5  | make templates           | ansible/proxmox/deploy.yml                   |
+|    |                          |   -> deploy_foreman_templates.yml            |
+|    |                          |   -> answer.toml.erb + ipxe.erb via Hammer   |
++----+--------------------------+----------------------------------------------+
 ```
 
 `make install` configures DHCP, TFTP, and Smart Proxy through `satellite-installer`. `make satellite-installer` applies the POC-specific Apache route through the same installer and its Puppet catalog. `make answer-service` installs the standalone answer service. The Hammer targets manage only Foreman objects and templates; they do not modify DHCP or Smart Proxy configuration files directly.

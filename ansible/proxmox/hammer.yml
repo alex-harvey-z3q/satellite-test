@@ -25,8 +25,8 @@
     proxmox_test_hostgroup_name: "Proxmox AWS Acceptance Test"
     proxmox_answer_template_name: "Proxmox Autoinstall Answer File"
     proxmox_ipxe_template_name: "Proxmox VE PXEiPXE"
-    proxmox_acceptance_fixture: "{{ playbook_dir }}/../spec/fixtures/foreman-acceptance-host.json"
-    proxmox_acceptance_fixture_example: "{{ playbook_dir }}/../spec/fixtures/foreman-acceptance-host.json.example"
+    proxmox_acceptance_fixture: "{{ playbook_dir }}/../../spec/fixtures/foreman-acceptance-host.json"
+    proxmox_acceptance_fixture_example: "{{ playbook_dir }}/../../spec/fixtures/foreman-acceptance-host.json.example"
 
   pre_tasks:
     - name: Require explicit approval for test-object creation

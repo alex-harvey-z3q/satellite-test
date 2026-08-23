@@ -37,7 +37,7 @@ validate: init ## Validate the Terraform configuration.
 
 preflight: validate ## Run Terraform validation and an Ansible syntax check.
 	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/site.yml
-	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox_prerequisites.yml
+	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/hammer.yml
 	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/customise.yml
 	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/deploy.yml
 
@@ -98,7 +98,7 @@ hammer: ## Create Foreman test objects using Terraform's dedicated provisioning 
 	@set -e; subnet_name="$$($(call tf_output,provisioning_subnet_name))"; \
 	$(ANSIBLE_PLAYBOOK) \
 		-i "$$($(call tf_output,public_ip))," \
-		$(ANSIBLE_DIR)/proxmox_prerequisites.yml \
+		$(ANSIBLE_DIR)/proxmox/hammer.yml \
 		$(ANSIBLE_REMOTE_ARGS) \
 		-e 'proxmox_prerequisites_apply=true' \
 		-e 'proxmox_allow_routable_test_subnet=true' \
