@@ -120,18 +120,18 @@ For a short-lived POC, omitting `satellite_fqdn` and `hosted_zone_id` uses the E
 |    |                          |   -> Foreman domain, subnet, host group,     |
 |    |                          |      and template associations               |
 +----+--------------------------+----------------------------------------------+
-| 3  | make satellite-installer | ansible/proxmox/customise.yml                |
+| 3  | make satellite-installer | ansible/proxmox/satellite_installer.yml      |
 |    |                          |   -> custom-hiera.yaml + proxmox_answer      |
 |    |                          |      Puppet module                           |
 |    |                          |   -> satellite-installer                     |
 |    |                          |   -> Apache /proxmox-answer route            |
 +----+--------------------------+----------------------------------------------+
-| 4  | make answer-service      | ansible/proxmox/deploy_foreman_answer.yml    |
+| 4  | make answer-service      | ansible/proxmox/answer_service.yml           |
 |    |                          |   -> Python answer adapter + systemd unit    |
 |    |                          |   -> Unix socket                             |
 +----+--------------------------+----------------------------------------------+
-| 5  | make templates           | ansible/proxmox/deploy.yml                   |
-|    |                          |   -> deploy_foreman_templates.yml            |
+| 5  | make templates           | ansible/proxmox/templates.yml                |
+|    |                          |   -> foreman_templates.yml                   |
 |    |                          |   -> answer.toml.erb + ipxe.erb via Hammer   |
 +----+--------------------------+----------------------------------------------+
 ```

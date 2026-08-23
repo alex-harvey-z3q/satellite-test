@@ -38,8 +38,9 @@ validate: init ## Validate the Terraform configuration.
 preflight: validate ## Run Terraform validation and an Ansible syntax check.
 	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/site.yml
 	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/hammer.yml
-	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/customise.yml
-	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/deploy.yml
+	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/satellite_installer.yml
+	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/answer_service.yml
+	$(ANSIBLE_PLAYBOOK) --syntax-check -i 'localhost,' $(ANSIBLE_DIR)/proxmox/templates.yml
 
 configure: ## Create the non-secret Ansible settings file when absent.
 	@if [ -f $(ANSIBLE_DIR)/group_vars/all/main.yml ]; then \
@@ -84,14 +85,14 @@ satellite-installer: ## Apply the POC-specific Apache route through Satellite In
 	@$(ANSIBLE_PLAYBOOK) \
 		-i "$$($(call tf_output,public_ip))," \
 		$(ANSIBLE_REMOTE_ARGS) \
-		$(ANSIBLE_DIR)/proxmox/customise.yml
+		$(ANSIBLE_DIR)/proxmox/satellite_installer.yml
 
 answer-service: ## Install the POC-specific answer-adapter service.
 	$(require_ssh_private_key)
 	@$(ANSIBLE_PLAYBOOK) \
 		-i "$$($(call tf_output,public_ip))," \
 		$(ANSIBLE_REMOTE_ARGS) \
-		$(ANSIBLE_DIR)/proxmox/deploy_foreman_answer.yml
+		$(ANSIBLE_DIR)/proxmox/answer_service.yml
 
 hammer: ## Create Foreman test objects using Terraform's dedicated provisioning subnet.
 	$(require_ssh_private_key)
@@ -116,7 +117,7 @@ templates: ## Deploy the POC answer and iPXE templates through Hammer.
 		-i "$$($(call tf_output,public_ip))," \
 		$(ANSIBLE_REMOTE_ARGS) \
 		-e "proxmox_foreman_fqdn=$$($(call tf_output,satellite_fqdn))" \
-		$(ANSIBLE_DIR)/proxmox/deploy.yml
+		$(ANSIBLE_DIR)/proxmox/templates.yml
 
 test-setup: ## Install the Ruby dependencies used by the Serverspec suites.
 	bundle install
