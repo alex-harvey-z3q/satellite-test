@@ -25,64 +25,38 @@ aws sts get-caller-identity
 
 ## Complete workflow
 
-1. Check the local toolchain and Terraform configuration:
+Export `SSH_PRIVATE_KEY_FILE` once in the shell, using the absolute path for
+the EC2 key pair named in `terraform/terraform.tfvars`.
 
-   ```sh
-   make preflight
-   ```
+```sh
+export SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
 
-2. Review the exact AWS resources that would be created. This does not create anything:
+make preflight              # Check toolchain and configuration
+make plan                   # Review proposed AWS resources
+make apply                  # Create the EC2 host and EBS volumes
 
-   ```sh
-   make plan
-   ```
+read -r "RHSM_USERNAME?Red Hat login: "             # Read Red Hat credentials without storing them
+read -rs "RHSM_PASSWORD?Red Hat password: "
+echo
+export RHSM_USERNAME RHSM_PASSWORD
 
-3. Create the EC2 host and EBS volume. Terraform will show the final plan and ask for confirmation:
+make install                 # Install base Satellite; can take tens of minutes
+unset RHSM_USERNAME RHSM_PASSWORD
 
-   ```sh
-   make apply
-   ```
+make hammer                  # Create Foreman records through Hammer
+make satellite-installer     # Apply the POC Apache route through Satellite Installer
+make answer-service          # Install the standalone answer adapter
+make templates               # Update the POC Foreman templates through Hammer
 
-4. Supply the two Red Hat credentials in the current shell. `read -s` prevents the password from being echoed; do not put either value in `terraform.tfvars`, `main.yml`, a command line, or Git.
+make test-contract           # Verify the deployed integration
+make output                  # Show instance ID, IPs, and Satellite FQDN
+make destroy                 # Delete the POC when finished
+```
 
-   ```sh
-   read -r "RHSM_USERNAME?Red Hat login: "
-   read -rs "RHSM_PASSWORD?Red Hat password: "
-   echo
-   export RHSM_USERNAME RHSM_PASSWORD
-   ```
-
-5. Install base Satellite. `SSH_PRIVATE_KEY_FILE` must be the absolute path of the private key matching the `key_name` configured in `terraform/terraform.tfvars`. The `satellite-installer` target creates the non-secret Ansible settings file when needed, installs its required collection, registers the host with Red Hat Subscription Management, mounts the Pulp disk, and runs `satellite-installer` with the Foreman Proxy DHCP and TFTP features configured for the dedicated provisioning interface.
-
-   ```sh
-   make install SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-   ```
-
-   The install can take tens of minutes. It writes `/var/log/satellite-installer-poc.log` on the EC2 host. `satellite-installer` is safe to run again to reconcile its configuration.
-
-6. Immediately clear the Red Hat secrets from the current shell:
-
-   ```sh
-   unset RHSM_USERNAME RHSM_PASSWORD
-   ```
-
-7. Show the instance address, Satellite FQDN, and other outputs:
-
-   ```sh
-   make output
-   ```
-
-   To connect over SSH for troubleshooting:
-
-   ```sh
-   make ssh SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-   ```
-
-8. Destroy the POC when finished. Terraform asks for confirmation. This terminates the EC2 instance and deletes its Pulp EBS volume:
-
-   ```sh
-   make destroy
-   ```
+Do not put Red Hat credentials in `terraform.tfvars`, Ansible variables, shell
+history, or Git. Satellite installation logs are written to
+`/var/log/satellite-installer-poc.log` on the EC2 host. For troubleshooting,
+run `make ssh`.
 
 ## Network and DNS
 
@@ -176,10 +150,10 @@ Proxmox-specific Apache route or answer service. Apply the POC in its
 technology-layer order:
 
 ```sh
-make hammer SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-make satellite-installer SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-make answer-service SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
-make templates SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make hammer
+make satellite-installer
+make answer-service
+make templates
 ```
 
 The targets are intentionally independent. Run them in the order shown above:
@@ -203,7 +177,7 @@ export FOREMAN_PASSWORD='Welcome1'
 Then run the safe HTTP contract suite. It makes only invalid or deliberately unregistered requests and does not change Foreman data:
 
 ```sh
-make test-contract SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make test-contract
 ```
 
 It verifies the installer-managed services, standalone answer adapter, Foreman subnet/proxy association, host-group boot configuration, template associations, and exact template bodies. It also verifies the adapter rejects incorrect methods, content types, JSON, MAC addresses, and oversized requests with the documented HTTP status codes, and that an unregistered valid MAC receives HTTP 404.
@@ -211,7 +185,7 @@ It verifies the installer-managed services, standalone answer adapter, Foreman s
 The end-to-end acceptance suite creates one disposable Foreman host, requests its answer file from the standalone adapter, validates the returned TOML, then deletes that host. The host is named `codex-proxmox-acceptance-*`; the test refuses to delete a differently named host. Its API endpoint defaults to `https://` plus the Terraform public IP. Run it with:
 
 ```sh
-make test-acceptance SSH_PRIVATE_KEY_FILE=/absolute/path/to/private-key.pem
+make test-acceptance
 unset FOREMAN_USER FOREMAN_PASSWORD
 ```
 
